@@ -7,6 +7,7 @@ Pugotiread é a base inicial de um leitor web pessoal, leve e moderno para homel
 - Backend Node.js com TypeScript usando apenas módulos nativos do Node.
 - Frontend em HTML, CSS e TypeScript sem framework pesado.
 - Login simples com sessão por cookie.
+- Login com conta Google para usuários convidados, quando `GOOGLE_CLIENT_ID` estiver configurado.
 - Usuários `admin` e `user` de demonstração.
 - Bibliotecas com permissões por usuário.
 - Varredura inicial de pastas montadas em `/media`.
@@ -87,6 +88,16 @@ Fluxo básico:
 9. As páginas são servidas por rotas seguras como `/api/contents/:id/pages/:page`.
 
 As imagens não são expostas diretamente como arquivos públicos. O backend confere a sessão e a permissão da biblioteca antes de entregar cada página.
+
+## Login com Google por convite
+
+Para liberar o login com Google, crie um OAuth Client ID no Google Cloud Console do tipo "Web application" e configure o domínio/origem onde o Pugotiread vai rodar. Depois defina:
+
+```bash
+GOOGLE_CLIENT_ID="seu-client-id.apps.googleusercontent.com"
+```
+
+Com essa variável ativa, o link de convite permite que a pessoa entre com a conta Google do mesmo e-mail convidado e escolha o nickname. O backend valida o ID token com as chaves públicas do Google antes de criar a conta e marcar o convite como usado.
 
 ## Como montar a pasta de mídias
 
@@ -208,6 +219,18 @@ Para parar:
 ```bash
 docker compose down
 ```
+
+## ZimaOS
+
+Para rodar no ZimaOS, use o mesmo `docker-compose.yml` e aponte os volumes para as pastas reais do sistema. Exemplo:
+
+```yaml
+volumes:
+  - /DATA/AppData/pugotiread/data:/app/data
+  - /DATA/Media/Leituras:/media:ro
+```
+
+Se o app estiver rodando a partir do compose do repositório, o `GOOGLE_CLIENT_ID` já pode ficar no arquivo. Depois de salvar, recrie o container para ele receber a variável e as pastas corretas.
 
 ## Próximas etapas recomendadas
 

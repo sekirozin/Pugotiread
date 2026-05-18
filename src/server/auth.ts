@@ -21,9 +21,95 @@ export function toPublicUser(user: User): PublicUser {
     canDownload: user.canDownload,
     canChangePassword: user.canChangePassword,
     lastActiveAt: user.lastActiveAt,
+    needsNickname: Boolean(user.googleSub && !user.nickname),
     allowedLibraryIds: user.allowedLibraryIds,
     role: user.role
   };
+}
+
+type GoogleJwk = crypto.JsonWebKey & { kid: string };
+
+type GoogleTokenPayload = {
+  sub: string;
+  email: string;
+  email_verified: boolean | string;
+  name?: string;
+  picture?: string;
+  aud: string;
+  iss: string;
+  exp: number;
+};
+
+let googleKeyCache: { expiresAt: number; keys: GoogleJwk[] } | null = null;
+
+function decodeBase64UrlJson<T>(value: string): T {
+  return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as T;
+}
+
+async function getGoogleKeys(): Promise<GoogleJwk[]> {
+  if (googleKeyCache && googleKeyCache.expiresAt > Date.now()) {
+    return googleKeyCache.keys;
+  }
+
+  const response = await fetch("https://www.googleapis.com/oauth2/v3/certs");
+  if (!response.ok) {
+    throw new Error("Não foi possível validar o login do Google.");
+  }
+
+  const payload = (await response.json()) as { keys?: GoogleJwk[] };
+  const cacheControl = response.headers.get("cache-control") ?? "";
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeSeconds = maxAgeMatch ? Number(maxAgeMatch[1]) : 3600;
+  googleKeyCache = {
+    expiresAt: Date.now() + Math.max(60, maxAgeSeconds) * 1000,
+    keys: payload.keys ?? []
+  };
+  return googleKeyCache.keys;
+}
+
+export async function verifyGoogleIdToken(credential: string): Promise<GoogleTokenPayload> {
+  if (!config.googleClientId) {
+    throw new Error("Login com Google não configurado.");
+  }
+
+  const [encodedHeader, encodedPayload, encodedSignature] = credential.split(".");
+  if (!encodedHeader || !encodedPayload || !encodedSignature) {
+    throw new Error("Credencial do Google inválida.");
+  }
+
+  const header = decodeBase64UrlJson<{ alg: string; kid: string }>(encodedHeader);
+  if (header.alg !== "RS256" || !header.kid) {
+    throw new Error("Credencial do Google inválida.");
+  }
+
+  const keys = await getGoogleKeys();
+  const key = keys.find((item) => item.kid === header.kid);
+  if (!key) {
+    throw new Error("Não foi possível validar o login do Google.");
+  }
+
+  const verifier = crypto.createVerify("RSA-SHA256");
+  verifier.update(`${encodedHeader}.${encodedPayload}`);
+  verifier.end();
+  const validSignature = verifier.verify(crypto.createPublicKey({ key, format: "jwk" }), Buffer.from(encodedSignature, "base64url"));
+  if (!validSignature) {
+    throw new Error("Credencial do Google inválida.");
+  }
+
+  const payload = decodeBase64UrlJson<GoogleTokenPayload>(encodedPayload);
+  const verifiedEmail = payload.email_verified === true || payload.email_verified === "true";
+  if (
+    payload.aud !== config.googleClientId ||
+    !["accounts.google.com", "https://accounts.google.com"].includes(payload.iss) ||
+    payload.exp * 1000 < Date.now() ||
+    !payload.sub ||
+    !payload.email ||
+    !verifiedEmail
+  ) {
+    throw new Error("Credencial do Google inválida.");
+  }
+
+  return payload;
 }
 
 export function hashPassword(password: string): string {

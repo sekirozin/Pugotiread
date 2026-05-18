@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, setSessionCookie, toPublicUser, verifyPassword } from "./auth.js";
+import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, setSessionCookie, toPublicUser, verifyGoogleIdToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { readJson, sendFile, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { getContentCoverPath, getContentPagePath, scanLibrary } from "./media.js";
-import { store } from "./store.js";
-import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PublicContentReview, User } from "../shared/types.js";
+import { normalizeVaultTimeoutMinutes, store } from "./store.js";
+import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PublicContentReview, ServerSettings, User } from "../shared/types.js";
 
 function isPersonalLibrary(library: Library): boolean {
   return Boolean(library.isPersonal);
@@ -24,8 +24,8 @@ function getPersonalLibraries(user: User, libraries: Library[]): Library[] {
   return libraries.filter((library) => isPersonalLibrary(library) && library.ownerUserId === user.id);
 }
 
-function createVaultToken(userId: string): string {
-  const payload = `${userId}.${Date.now() + 15 * 60 * 1000}`;
+function createVaultToken(userId: string, timeoutMinutes: number): string {
+  const payload = `${userId}.${Date.now() + timeoutMinutes * 60 * 1000}`;
   const signature = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
 }
@@ -147,6 +147,10 @@ function makeUserId(base: string, existing: User[]): string {
 
 function makeInviteToken(): string {
   return crypto.randomBytes(18).toString("hex");
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 function sanitizeLibraryIds(libraryIds: string[], libraries: Library[]): string[] {
@@ -292,6 +296,87 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
+  if (url.pathname === "/api/auth/google/config" && req.method === "GET") {
+    sendJson(res, 200, {
+      enabled: Boolean(config.googleClientId),
+      clientId: config.googleClientId
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/auth/google" && req.method === "POST") {
+    const body = await readJson<{ credential: string; inviteToken?: string }>(req);
+
+    try {
+      const inviteToken = body.inviteToken?.trim() ?? "";
+      if (!inviteToken) {
+        sendJson(res, 403, { error: "Login com Google disponível apenas por convite." });
+        return;
+      }
+
+      const googleProfile = await verifyGoogleIdToken(body.credential ?? "");
+      const email = normalizeEmail(googleProfile.email);
+      const data = await store.read();
+      const now = new Date().toISOString();
+      const invitation = data.invitations.find((item) => item.token === inviteToken && !item.usedAt);
+      if (!invitation) {
+        sendJson(res, 404, { error: "Convite não encontrado ou já utilizado." });
+        return;
+      }
+
+      if (invitation.email && normalizeEmail(invitation.email) !== email) {
+        sendJson(res, 403, { error: "Use a conta Google do e-mail convidado." });
+        return;
+      }
+
+      let found = data.users.find((item) => item.googleSub === googleProfile.sub) ?? data.users.find((item) => normalizeEmail(item.email) === email);
+
+      if (!found) {
+        const usernameBase = invitation.username.trim() || googleProfile.email.split("@")[0]?.trim() || googleProfile.name?.trim() || "user";
+        const username = data.users.some((item) => item.username === usernameBase) ? makeUserId(usernameBase, data.users) : usernameBase;
+        found = {
+          id: makeUserId(username, data.users),
+          username,
+          displayName: googleProfile.name?.trim() || invitation.displayName || email,
+          email,
+          avatarUrl: googleProfile.picture ?? "",
+          googleSub: googleProfile.sub,
+          nickname: "",
+          biography: "",
+          location: "",
+          favoriteContentIds: [],
+          canLogin: invitation.canLogin,
+          canDownload: invitation.canDownload,
+          canChangePassword: false,
+          lastActiveAt: now,
+          role: "user",
+          passwordHash: "google-only",
+          allowedLibraryIds: invitation.allowedLibraryIds
+        };
+        data.users.push(found);
+      }
+
+      if (!found.canLogin) {
+        sendJson(res, 403, { error: "Esta conta está bloqueada para login." });
+        return;
+      }
+
+      found.googleSub = googleProfile.sub;
+      found.email = email;
+      found.avatarUrl = googleProfile.picture ?? found.avatarUrl;
+      found.displayName = googleProfile.name?.trim() || found.displayName;
+      found.lastActiveAt = now;
+      invitation.usedAt = now;
+      await store.write(data);
+
+      setSessionCookie(res, createSessionToken(found.id));
+      sendJson(res, 200, { user: toPublicUser(found) });
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Falha no login com Google." });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/logout" && req.method === "POST") {
     clearSessionCookie(res);
     sendNoContent(res);
@@ -313,7 +398,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
   if (url.pathname.startsWith("/api/invites/") && req.method === "POST") {
     const token = decodeURIComponent(url.pathname.split("/")[3] ?? "");
-    const body = await readJson<{ email: string; displayName: string; username: string; password: string }>(req);
+    const body = await readJson<{ email: string; nickname: string; password: string }>(req);
     const data = await store.read();
     const invitation = data.invitations.find((item) => item.token === token && !item.usedAt);
     if (!invitation) {
@@ -321,41 +406,56 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const email = body.email?.trim() ?? "";
-    const displayName = body.displayName?.trim() ?? body.username?.trim() ?? "";
-    const username = body.username?.trim() ?? "";
+    const email = normalizeEmail(body.email ?? "");
+    const nickname = body.nickname?.trim() ?? "";
     const password = body.password?.trim() ?? "";
 
-    if (!email || !displayName || !username || !password) {
-      sendJson(res, 400, { error: "Preencha e-mail, nome, usuário e senha." });
+    if (!email || !nickname || !password) {
+      sendJson(res, 400, { error: "Preencha nickname, e-mail e senha." });
       return;
     }
 
-    if (data.users.some((item) => item.username === username)) {
-      sendJson(res, 400, { error: "Usuário já existe." });
+    if (nickname.length > 40) {
+      sendJson(res, 400, { error: "O nickname deve ter até 40 caracteres." });
       return;
     }
 
-    const user = await store.createUser({
+    if (invitation.email && normalizeEmail(invitation.email) !== email) {
+      sendJson(res, 403, { error: "Use o e-mail convidado." });
+      return;
+    }
+
+    if (data.users.some((item) => normalizeEmail(item.email) === email)) {
+      sendJson(res, 400, { error: "Já existe uma conta com este e-mail." });
+      return;
+    }
+
+    const usernameBase = invitation.username.trim() || email.split("@")[0] || nickname || "user";
+    const username = data.users.some((item) => item.username === usernameBase) ? makeUserId(usernameBase, data.users) : usernameBase;
+    const now = new Date().toISOString();
+    const user = {
       id: makeUserId(username, data.users),
       username,
-      displayName,
+      displayName: invitation.displayName || nickname,
       email,
       avatarUrl: "",
-      nickname: "",
+      nickname,
       biography: "",
       location: "",
       favoriteContentIds: [],
       canLogin: invitation.canLogin,
       canDownload: invitation.canDownload,
-      canChangePassword: invitation.canChangePassword,
-      lastActiveAt: null,
-      role: "user",
+      canChangePassword: true,
+      lastActiveAt: now,
+      role: "user" as const,
       passwordHash: hashPassword(password),
       allowedLibraryIds: invitation.allowedLibraryIds
-    });
+    };
+    data.users.push(user);
+    invitation.usedAt = now;
+    await store.write(data);
 
-    await store.consumeInvitation(token);
+    setSessionCookie(res, createSessionToken(user.id));
     sendJson(res, 201, { user: toPublicUser(user) });
     return;
   }
@@ -400,11 +500,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     const data = await store.read();
-    const vaultToken = createVaultToken(user.id);
-    res.setHeader("Set-Cookie", `pugotiread_vault=${encodeURIComponent(vaultToken)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=900`);
+    const vaultTimeoutMinutes = normalizeVaultTimeoutMinutes(data.settings.vaultTimeoutMinutes);
+    const vaultToken = createVaultToken(user.id, vaultTimeoutMinutes);
+    res.setHeader("Set-Cookie", `pugotiread_vault=${encodeURIComponent(vaultToken)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${vaultTimeoutMinutes * 60}`);
     sendJson(res, 200, {
       libraries: getPersonalLibraries(user, data.libraries),
-      vaultToken
+      vaultToken,
+      vaultTimeoutMinutes
     });
     return;
   }
@@ -412,6 +514,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
   if (url.pathname === "/api/personal-vault/lock" && req.method === "POST") {
     res.setHeader("Set-Cookie", "pugotiread_vault=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/personal-vault/touch" && req.method === "POST") {
+    if (user.role !== "admin" || !hasValidVaultToken(req, user)) {
+      sendJson(res, 403, { error: "Cofre bloqueado." });
+      return;
+    }
+
+    const data = await store.read();
+    const vaultTimeoutMinutes = normalizeVaultTimeoutMinutes(data.settings.vaultTimeoutMinutes);
+    const vaultToken = createVaultToken(user.id, vaultTimeoutMinutes);
+    res.setHeader("Set-Cookie", `pugotiread_vault=${encodeURIComponent(vaultToken)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${vaultTimeoutMinutes * 60}`);
+    sendJson(res, 200, { vaultToken, vaultTimeoutMinutes });
     return;
   }
 
@@ -492,6 +608,36 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
+  if (url.pathname === "/api/admin/settings" && req.method === "GET") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem ver configurações do servidor." });
+      return;
+    }
+
+    const data = await store.read();
+    sendJson(res, 200, { settings: data.settings });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/settings" && req.method === "PATCH") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem editar configurações do servidor." });
+      return;
+    }
+
+    const body = await readJson<Partial<ServerSettings>>(req);
+    if (!Number.isInteger(Number(body.vaultTimeoutMinutes)) || Number(body.vaultTimeoutMinutes) < 1) {
+      sendJson(res, 400, { error: "O tempo do cofre deve ser um número inteiro maior que zero." });
+      return;
+    }
+
+    const settings = await store.updateSettings({
+      vaultTimeoutMinutes: Number(body.vaultTimeoutMinutes)
+    });
+    sendJson(res, 200, { settings });
+    return;
+  }
+
   if (url.pathname === "/api/admin/users" && req.method === "POST") {
     if (user.role !== "admin") {
       sendJson(res, 403, { error: "Apenas administradores podem criar usuários." });
@@ -543,6 +689,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       email: string;
       displayName: string;
       username: string;
+      linkOnly?: boolean;
       allowedLibraryIds: string[];
       canLogin: boolean;
       canDownload: boolean;
@@ -552,11 +699,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
     try {
       const token = makeInviteToken();
+      const linkOnly = Boolean(body.linkOnly);
       const invitation: Invitation = {
         token,
-        email: body.email?.trim() ?? "",
-        displayName: body.displayName?.trim() ?? body.username?.trim() ?? "",
-        username: body.username?.trim() ?? "",
+        email: linkOnly ? "" : body.email?.trim() ?? "",
+        displayName: linkOnly ? "" : body.displayName?.trim() ?? body.username?.trim() ?? "",
+        username: linkOnly ? "" : body.username?.trim() ?? "",
         allowedLibraryIds: sanitizeLibraryIds(body.allowedLibraryIds ?? [], data.libraries),
         canLogin: body.canLogin ?? true,
         canDownload: body.canDownload ?? true,
@@ -565,7 +713,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         usedAt: null
       };
 
-      if (!invitation.email || !invitation.displayName || !invitation.username) {
+      if (!linkOnly && (!invitation.email || !invitation.displayName || !invitation.username)) {
         sendJson(res, 400, { error: "Preencha e-mail, nome e usuário." });
         return;
       }
@@ -706,6 +854,89 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     });
 
     sendJson(res, 201, { library });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/libraries/") && req.method === "PATCH") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem editar bibliotecas." });
+      return;
+    }
+
+    const libraryId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ name: string; kind: string; path: string }>(req);
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+    if (!library) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    const name = body.name?.trim();
+    const libraryPath = body.path?.trim();
+    if (!name || !libraryPath || !isLibraryKind(body.kind)) {
+      sendJson(res, 400, { error: "Nome, tipo e pasta são obrigatórios." });
+      return;
+    }
+
+    if (!isInsideMediaRoot(libraryPath)) {
+      sendJson(res, 400, { error: `A pasta deve estar dentro de ${config.mediaRoot}.` });
+      return;
+    }
+
+    const stat = await fs.stat(libraryPath).catch(() => null);
+    if (!stat?.isDirectory()) {
+      sendJson(res, 400, { error: "A pasta selecionada não existe ou não é um diretório." });
+      return;
+    }
+
+    const candidateLibrary: Library = {
+      ...library,
+      name,
+      kind: body.kind,
+      path: libraryPath
+    };
+    const detectedContents = await scanLibrary(candidateLibrary);
+    if (detectedContents.length === 0) {
+      sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+      return;
+    }
+
+    const updated = await store.updateLibrary(library.id, {
+      name,
+      kind: body.kind,
+      path: libraryPath
+    });
+    if (!updated) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    sendJson(res, 200, { library: updated });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/libraries/") && req.method === "DELETE") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem apagar bibliotecas." });
+      return;
+    }
+
+    const libraryId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+    if (!library) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    const deleted = await store.deleteLibrary(library.id);
+    if (!deleted) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    sendNoContent(res);
     return;
   }
 

@@ -10,6 +10,7 @@ export interface User {
   displayName: string;
   email: string;
   avatarUrl: string;
+  googleSub?: string;
   nickname: string;
   biography: string;
   location: string;
@@ -37,6 +38,7 @@ export interface PublicUser {
   canDownload: boolean;
   canChangePassword: boolean;
   lastActiveAt: string | null;
+  needsNickname?: boolean;
   allowedLibraryIds: string[];
   role: UserRole;
 }
@@ -138,7 +140,12 @@ export interface PublicContentReview {
   updatedAt: string;
 }
 
+export interface ServerSettings {
+  vaultTimeoutMinutes: number;
+}
+
 export interface StoreShape {
+  settings: ServerSettings;
   users: User[];
   libraries: Library[];
   progress: ReadingProgress[];

@@ -1,7 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, ReadingProgress, SeriesMark, StoreShape, User } from "../shared/types.js";
+import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, ReadingProgress, SeriesMark, ServerSettings, StoreShape, User } from "../shared/types.js";
+
+export const defaultServerSettings: ServerSettings = {
+  vaultTimeoutMinutes: 5
+};
+
+export function normalizeVaultTimeoutMinutes(value: unknown): number {
+  const minutes = Number(value);
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    return defaultServerSettings.vaultTimeoutMinutes;
+  }
+  return minutes;
+}
 
 export class Store {
   private data: StoreShape | null = null;
@@ -18,10 +30,16 @@ export class Store {
 
   private normalize(data: Partial<StoreShape>): StoreShape {
     return {
+      settings: {
+        ...defaultServerSettings,
+        ...(data.settings ?? {}),
+        vaultTimeoutMinutes: normalizeVaultTimeoutMinutes(data.settings?.vaultTimeoutMinutes)
+      },
       users: (data.users ?? []).map((user) => ({
         ...user,
         email: user.email ?? "",
         avatarUrl: user.avatarUrl ?? "",
+        googleSub: user.googleSub ?? undefined,
         nickname: user.nickname ?? "",
         biography: user.biography ?? "",
         location: user.location ?? "",
@@ -100,7 +118,18 @@ export class Store {
     return user;
   }
 
-  async updateUser(userId: string, updates: Partial<Pick<User, "email" | "displayName" | "username" | "avatarUrl" | "nickname" | "biography" | "location" | "favoriteContentIds" | "canLogin" | "canDownload" | "canChangePassword" | "allowedLibraryIds" | "passwordHash">>): Promise<User | null> {
+  async updateSettings(updates: Partial<ServerSettings>): Promise<ServerSettings> {
+    const data = await this.read();
+    data.settings = {
+      ...data.settings,
+      ...updates,
+      vaultTimeoutMinutes: normalizeVaultTimeoutMinutes(updates.vaultTimeoutMinutes ?? data.settings.vaultTimeoutMinutes)
+    };
+    await this.write(data);
+    return data.settings;
+  }
+
+  async updateUser(userId: string, updates: Partial<Pick<User, "email" | "displayName" | "username" | "avatarUrl" | "googleSub" | "nickname" | "biography" | "location" | "favoriteContentIds" | "canLogin" | "canDownload" | "canChangePassword" | "allowedLibraryIds" | "passwordHash">>): Promise<User | null> {
     const data = await this.read();
     const user = data.users.find((item) => item.id === userId);
     if (!user) {
@@ -170,6 +199,48 @@ export class Store {
 
     await this.write(data);
     return library;
+  }
+
+  async updateLibrary(libraryId: string, updates: Pick<Library, "name" | "kind" | "path">): Promise<Library | null> {
+    const data = await this.read();
+    const library = data.libraries.find((item) => item.id === libraryId);
+    if (!library) {
+      return null;
+    }
+
+    library.name = updates.name;
+    library.kind = updates.kind;
+    library.path = updates.path;
+    await this.write(data);
+    return library;
+  }
+
+  async deleteLibrary(libraryId: string): Promise<boolean> {
+    const data = await this.read();
+    const index = data.libraries.findIndex((item) => item.id === libraryId);
+    if (index < 0) {
+      return false;
+    }
+
+    data.libraries.splice(index, 1);
+    const contentPrefix = `${libraryId}:`;
+    for (const user of data.users) {
+      user.allowedLibraryIds = user.allowedLibraryIds.filter((id) => id !== libraryId);
+      user.favoriteContentIds = user.favoriteContentIds.filter((contentId) => !contentId.startsWith(contentPrefix));
+    }
+    data.progress = data.progress.filter((item) => !item.contentId.startsWith(contentPrefix));
+    data.bookmarks = data.bookmarks.filter((item) => !item.contentId.startsWith(contentPrefix));
+    data.seriesMarks = data.seriesMarks.filter((item) => !item.contentId.startsWith(contentPrefix));
+    data.wantToRead = data.wantToRead.filter((item) => !item.contentId.startsWith(contentPrefix));
+    data.readingList = data.readingList.filter((item) => !item.contentId.startsWith(contentPrefix));
+    data.reviews = data.reviews.filter((item) => !item.contentId.startsWith(contentPrefix));
+    for (const collection of data.collections) {
+      collection.contentIds = collection.contentIds.filter((contentId) => !contentId.startsWith(contentPrefix));
+      collection.updatedAt = new Date().toISOString();
+    }
+
+    await this.write(data);
+    return true;
   }
 
   async markLibraryScanned(libraryId: string, scannedAt: string): Promise<void> {

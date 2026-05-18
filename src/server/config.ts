@@ -9,7 +9,9 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET ?? "pugotiread-dev-secret",
   dataFile: process.env.DATA_FILE ?? path.join(projectRoot, "data/store.json"),
   publicDir: process.env.PUBLIC_DIR ?? path.join(projectRoot, "public"),
+  iconsDir: process.env.ICONS_DIR ?? path.join(projectRoot, "icons"),
   clientDir: process.env.CLIENT_DIR ?? path.join(projectRoot, "dist/client"),
   mediaRoot: process.env.MEDIA_ROOT ?? path.join(projectRoot, "media"),
-  vaultMediaRoot: process.env.VAULT_MEDIA_ROOT ?? path.join(projectRoot, "media/cofre")
+  vaultMediaRoot: process.env.VAULT_MEDIA_ROOT ?? path.join(projectRoot, "media/cofre"),
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? ""
 };

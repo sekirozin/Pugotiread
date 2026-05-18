@@ -125,6 +125,52 @@ button {
   background: #d93025;
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
+.google-button-slot {
+  min-height: 44px;
+  margin-top: 14px;
+}
+
+.google-unavailable {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.invite-create-link {
+  display: block;
+  width: fit-content;
+  margin: 14px auto 0;
+  border: 0;
+  background: transparent;
+  color: #3b82f6;
+  font-weight: 700;
+  padding: 4px 6px;
+}
+
+.invite-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .app-shell {
   display: grid;
   min-height: 100vh;
@@ -181,6 +227,11 @@ button {
   background: var(--brand);
   color: var(--text);
   font-size: 0.7rem;
+}
+
+.brand-badge .nav-image-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .search-shell {
@@ -448,6 +499,13 @@ button {
   color: #eef2f5;
   font-size: 0.98rem;
   line-height: 1;
+}
+
+.nav-image-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
 }
 
 .nav-more {
@@ -904,6 +962,77 @@ button {
 
 .collection-owner {
   color: var(--brand-strong) !important;
+}
+
+.people-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.person-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #17191c;
+  padding: 14px;
+}
+
+.person-card-open {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.person-card-open h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-card-open p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.public-profile-page {
+  display: grid;
+  gap: 16px;
+}
+
+.public-profile-page > .button {
+  width: fit-content;
+}
+
+.person-collection-list {
+  display: grid;
+  gap: 8px;
+}
+
+.person-collection-row {
+  justify-content: flex-start;
+}
+
+.person-collection-pill {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #111318;
+  color: var(--text);
+  font-size: 0.86rem;
+  padding: 6px 10px;
 }
 
 .collection-edit-form {
@@ -1533,6 +1662,16 @@ button {
   background: transparent;
 }
 
+.vault-lock-button .nav-image-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-button .nav-image-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .library-vault-list {
   display: grid;
   gap: 8px;
@@ -1542,14 +1681,14 @@ button {
 .personal-library-row {
   display: grid;
   min-height: 42px;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
   color: var(--text);
-  padding: 8px 12px;
+  padding: 6px 8px 6px 12px;
   text-align: left;
 }
 
@@ -1557,9 +1696,44 @@ button {
   background: var(--panel-soft);
 }
 
-.personal-library-row span:last-child {
+.personal-library-main {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 2px 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.personal-library-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-library-main span:last-child {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.personal-library-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.personal-library-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.personal-library-actions .icon-button.danger {
+  color: var(--danger);
 }
 
 .settings-toolbar {
@@ -1575,6 +1749,15 @@ button {
   gap: 14px;
   border-top: 1px solid var(--line);
   padding-top: 16px;
+}
+
+.vault-settings-form {
+  max-width: 420px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .settings-row {
@@ -1750,14 +1933,28 @@ button {
 }
 
 .invite-user-modal-grid {
+  width: min(420px, 100%);
   max-width: 520px;
   grid-template-columns: 1fr;
+}
+
+.invite-user-modal-grid .form-row {
+  width: min(360px, 100%);
 }
 
 .user-modal-note {
   grid-column: 1 / -1;
   margin-top: 0;
-  max-width: 420px;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.invite-password-permission {
+  width: fit-content;
+}
+
+.invite-link-only {
+  margin-top: 6px;
 }
 
 .user-library-fieldset {
@@ -1812,11 +2009,15 @@ button {
 }
 
 .invite-banner.compact {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 12px;
   margin-top: 12px;
 }
 
-.invite-banner.compact .input {
-  width: 100%;
+.invite-banner.compact strong {
+  white-space: nowrap;
 }
 
 .invite-summary {

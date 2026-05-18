@@ -24,6 +24,7 @@ RUN npm install --omit=dev
 
 COPY --from=build /app/dist ./dist
 COPY public ./public
+COPY icons ./icons
 COPY data ./data
 
 EXPOSE 8099

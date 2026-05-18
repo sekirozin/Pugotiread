@@ -1,4 +1,4 @@
-import type { Bookmark, ContentItem, Invitation, Library, LibraryKind, PublicContentReview, PublicUser, ReadingProgress } from "../shared/types.js";
+import type { Bookmark, ContentItem, Invitation, Library, LibraryKind, PublicContentReview, PublicUser, ReadingProgress, ServerSettings } from "../shared/types.js";
 
 type UserCollection = {
   id: string;
@@ -15,6 +15,7 @@ type AppState = {
   libraries: Library[];
   personalLibraries: Library[];
   adminUsers: PublicUser[];
+  peopleUsers: PublicUser[];
   contents: ContentItem[];
   homeContents: ContentItem[];
   activeLibraryId: string | null;
@@ -32,7 +33,7 @@ type AppState = {
     | "profile"
     | "settings";
   settingsSection: "account" | "preferences" | "server";
-  serverSection: "libraries" | "users";
+  serverSection: "libraries" | "users" | "vault";
   accountMenuOpen: boolean;
   openLibraryMenuId: string | null;
   vaultMenuOpen: boolean;
@@ -41,6 +42,7 @@ type AppState = {
   openSeriesRemoveMenuId: string | null;
   libraryModalOpen: boolean;
   libraryModalError: string;
+  editingLibraryId: string | null;
   collectionModalOpen: boolean;
   collectionModalError: string;
   collectionShareModalOpen: boolean;
@@ -51,6 +53,8 @@ type AppState = {
   collectionDeleteError: string;
   editingCollectionId: string | null;
   collectionEditError: string;
+  peopleShareError: string;
+  activePeopleUserId: string | null;
   scanMessage: string;
   libraryModalStep: "general" | "folder" | "cover" | "advanced";
   libraryDraft: {
@@ -92,9 +96,14 @@ type AppState = {
   invitePathToken: string | null;
   inviteData: Invitation | null;
   inviteError: string;
+  inviteCreateAccountOpen: boolean;
   vaultUnlocked: boolean;
   vaultToken: string;
   vaultError: string;
+  vaultTimeoutMinutes: number;
+  vaultSettingsDraft: string;
+  vaultSettingsMessage: string;
+  vaultSettingsError: string;
   adminUserModalOpen: boolean;
   adminUserModalMode: "create" | "edit" | "invite";
   adminUserEditingId: string | null;
@@ -114,10 +123,42 @@ type AppState = {
   reader: { content: ContentItem; page: number; mode: "page" | "vertical" } | null;
 };
 
+const defaultVaultTimeoutMinutes = 5;
+let vaultInactivityTimer: number | null = null;
+let lastVaultTouchAt = 0;
+let vaultTouchInFlight = false;
+
 type ParsedSearch = {
   libraryId: string | null;
   query: string;
 };
+
+type GoogleCredentialResponse = {
+  credential?: string;
+};
+
+type GoogleConfig = {
+  enabled: boolean;
+  clientId: string;
+};
+
+type GoogleAccounts = {
+  accounts: {
+    id: {
+      initialize(options: { client_id: string; callback: (response: GoogleCredentialResponse) => void }): void;
+      renderButton(element: HTMLElement, options: { theme: string; size: string; width: number; text?: string }): void;
+    };
+  };
+};
+
+declare global {
+  interface Window {
+    google?: GoogleAccounts;
+  }
+}
+
+let googleConfigPromise: Promise<GoogleConfig> | null = null;
+let googleScriptPromise: Promise<void> | null = null;
 
 const appElement = document.querySelector<HTMLDivElement>("#app");
 if (!appElement) {
@@ -158,11 +199,31 @@ function renderIcon(name: keyof typeof ICONS): string {
   return ICONS[name];
 }
 
+const SIDEBAR_ICON_PATHS = {
+  home: "/icons/home/home_32x32.png",
+  want: "/icons/star/star_32x32.png",
+  collections: "/icons/medal/medal_32x32.png",
+  lists: "/icons/list/list_32x32.png",
+  bookmarks: "/icons/markbook/markbook_32x32.png",
+  all: "/icons/book/book_32x32.png",
+  people: "/icons/users/users_32x32.png",
+  book: "/icons/book/book_32x32.png",
+  pencil: "/icons/pencil/pencil_32x32.png",
+  vaultOpen: "/icons/lock_open/lock_open_32x32.png",
+  vaultClosed: "/icons/lock_closed/lock_closed_32x32.png",
+  trash: "/icons/trash/trash_32x32.png"
+} as const;
+
+function renderSidebarIcon(name: keyof typeof SIDEBAR_ICON_PATHS, label: string): string {
+  return `<img class="nav-image-icon" src="${SIDEBAR_ICON_PATHS[name]}" alt="" aria-hidden="true" title="${escapeHtml(label)}" />`;
+}
+
 const state: AppState = {
   user: null,
   libraries: [],
   personalLibraries: [],
   adminUsers: [],
+  peopleUsers: [],
   contents: [],
   homeContents: [],
   activeLibraryId: null,
@@ -178,6 +239,7 @@ const state: AppState = {
   openSeriesRemoveMenuId: null,
   libraryModalOpen: false,
   libraryModalError: "",
+  editingLibraryId: null,
   collectionModalOpen: false,
   collectionModalError: "",
   collectionShareModalOpen: false,
@@ -188,6 +250,8 @@ const state: AppState = {
   collectionDeleteError: "",
   editingCollectionId: null,
   collectionEditError: "",
+  peopleShareError: "",
+  activePeopleUserId: null,
   scanMessage: "",
   libraryModalStep: "general",
   libraryDraft: {
@@ -225,9 +289,14 @@ const state: AppState = {
   invitePathToken: null,
   inviteData: null,
   inviteError: "",
+  inviteCreateAccountOpen: false,
   vaultUnlocked: false,
   vaultToken: "",
   vaultError: "",
+  vaultTimeoutMinutes: defaultVaultTimeoutMinutes,
+  vaultSettingsDraft: String(defaultVaultTimeoutMinutes),
+  vaultSettingsMessage: "",
+  vaultSettingsError: "",
   adminUserModalOpen: false,
   adminUserModalMode: "create",
   adminUserEditingId: null,
@@ -270,6 +339,79 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function getGoogleConfig(): Promise<GoogleConfig> {
+  googleConfigPromise ??= api<GoogleConfig>("/api/auth/google/config");
+  return googleConfigPromise;
+}
+
+async function ensureGoogleScript(): Promise<void> {
+  if (window.google) {
+    return;
+  }
+
+  googleScriptPromise ??= new Promise((resolve, reject) => {
+    const existingScript = document.querySelector<HTMLScriptElement>("script[data-google-identity]");
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Não foi possível carregar o login do Google.")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentity = "true";
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => reject(new Error("Não foi possível carregar o login do Google.")), { once: true });
+    document.head.append(script);
+  });
+  await googleScriptPromise;
+}
+
+async function mountGoogleButton(
+  containerId: string,
+  callback: (credential: string) => Promise<void>,
+  unavailableMessage: string
+): Promise<void> {
+  const container = document.querySelector<HTMLElement>(`#${containerId}`);
+  if (!container) {
+    return;
+  }
+
+  try {
+    const config = await getGoogleConfig();
+    if (!config.enabled || !config.clientId) {
+      container.innerHTML = `<p class="google-unavailable">${escapeHtml(unavailableMessage)}</p>`;
+      return;
+    }
+
+    await ensureGoogleScript();
+    if (!window.google) {
+      throw new Error("Login do Google indisponível.");
+    }
+
+    window.google.accounts.id.initialize({
+      client_id: config.clientId,
+      callback: (response) => {
+        if (!response.credential) {
+          container.innerHTML = `<p class="google-unavailable">Credencial do Google não recebida.</p>`;
+          return;
+        }
+        void callback(response.credential);
+      }
+    });
+    window.google.accounts.id.renderButton(container, {
+      theme: "outline",
+      size: "large",
+      width: Math.min(360, container.clientWidth || 360),
+      text: "signin_with"
+    });
+  } catch (error) {
+    container.innerHTML = `<p class="google-unavailable">${escapeHtml(error instanceof Error ? error.message : unavailableMessage)}</p>`;
+  }
+}
+
 function closeFloatingMenusFromOutside(target: EventTarget | null): void {
   const element = target instanceof HTMLElement ? target : null;
   if (!element || element.closest("[data-series-menu-key], .series-context-menu, .series-add-menu, .series-remove-menu")) {
@@ -290,6 +432,10 @@ document.addEventListener("click", (event) => {
   closeFloatingMenusFromOutside(event.target);
 });
 
+["click", "keydown", "pointermove", "scroll"].forEach((eventName) => {
+  document.addEventListener(eventName, registerVaultActivity, { passive: true });
+});
+
 async function boot(): Promise<void> {
   if (window.location.pathname.startsWith("/invite/")) {
     state.invitePathToken = decodeURIComponent(window.location.pathname.split("/")[2] ?? "");
@@ -300,6 +446,10 @@ async function boot(): Promise<void> {
   try {
     const payload = await api<{ user: PublicUser }>("/api/me");
     state.user = payload.user;
+    if (state.user.needsNickname) {
+      renderNicknameSetup();
+      return;
+    }
     await loadHome();
   } catch {
     renderLogin();
@@ -329,20 +479,23 @@ async function loadHome(): Promise<void> {
     api<{ bookmarks: Bookmark[] }>("/api/bookmarks"),
     api<{ seriesMarks: string[] }>("/api/series-marks"),
     api<{ wantToRead: string[]; readingList: string[]; collections: UserCollection[] }>("/api/user-lists"),
-    api<{ reviews: PublicContentReview[] }>("/api/me/reviews")
+    api<{ reviews: PublicContentReview[] }>("/api/me/reviews"),
+    api<{ users: PublicUser[] }>("/api/users")
   ];
 
   if (state.user?.role === "admin") {
     requests.push(api<{ users: PublicUser[]; libraries: Library[] }>("/api/admin/users"));
+    requests.push(api<{ settings: ServerSettings }>("/api/admin/settings"));
   }
 
-  const [librariesPayload, progressPayload, bookmarksPayload, seriesMarksPayload, userListsPayload, reviewsPayload, adminPayload] = await Promise.all(requests);
+  const [librariesPayload, progressPayload, bookmarksPayload, seriesMarksPayload, userListsPayload, reviewsPayload, usersPayload, adminPayload, settingsPayload] = await Promise.all(requests);
   const { libraries } = librariesPayload as { libraries: Library[] };
   const { progress } = progressPayload as { progress: ReadingProgress[] };
   const { bookmarks } = bookmarksPayload as { bookmarks: Bookmark[] };
   const { seriesMarks } = seriesMarksPayload as { seriesMarks: string[] };
   const userLists = userListsPayload as { wantToRead: string[]; readingList: string[]; collections: UserCollection[] };
   const { reviews } = reviewsPayload as { reviews: PublicContentReview[] };
+  const { users } = usersPayload as { users: PublicUser[] };
 
   state.libraries = libraries;
   state.progress = progress;
@@ -352,10 +505,16 @@ async function loadHome(): Promise<void> {
   state.readingList = userLists.readingList;
   state.collections = userLists.collections;
   state.profileReviews = reviews;
+  state.peopleUsers = users;
   if (adminPayload) {
     const payload = adminPayload as { users: PublicUser[]; libraries: Library[] };
     state.adminUsers = payload.users;
     state.libraries = payload.libraries;
+  }
+  if (settingsPayload) {
+    const { settings } = settingsPayload as { settings: ServerSettings };
+    state.vaultTimeoutMinutes = settings.vaultTimeoutMinutes;
+    state.vaultSettingsDraft = String(settings.vaultTimeoutMinutes);
   }
   state.homeContents = await loadLibraryContents(libraries);
   state.activeLibraryId = null;
@@ -417,6 +576,10 @@ function renderLogin(error = ""): void {
         })
       });
       state.user = payload.user;
+      if (state.user.needsNickname) {
+        renderNicknameSetup();
+        return;
+      }
       await loadHome();
     } catch (loginError) {
       renderLogin(loginError instanceof Error ? loginError.message : "Falha no login.");
@@ -426,11 +589,16 @@ function renderLogin(error = ""): void {
 
 function renderInviteRegistration(): void {
   const invitation = state.inviteData;
+  if (state.inviteCreateAccountOpen) {
+    renderInviteAccountCreation(invitation);
+    return;
+  }
+
   app.innerHTML = `
     <main class="login-shell">
       <form class="login-panel invite-panel" id="invite-form">
         <h1 class="brand">Pugotiread</h1>
-        <p class="muted">Concluir cadastro por convite</p>
+        <p class="muted">Entrar com convite</p>
         ${
           invitation
             ? `
@@ -438,48 +606,146 @@ function renderInviteRegistration(): void {
             `
             : ""
         }
+        <button class="invite-create-link" id="open-invite-create-account" type="button">Criar conta</button>
+        <div class="login-divider"><span>ou</span></div>
+        <div class="google-button-slot" id="google-invite-button"></div>
+        <p class="error">${escapeHtml(state.inviteError)}</p>
+      </form>
+    </main>
+  `;
+
+  document.querySelector("#open-invite-create-account")?.addEventListener("click", () => {
+    state.inviteCreateAccountOpen = true;
+    state.inviteError = "";
+    renderInviteRegistration();
+  });
+
+  document.querySelector<HTMLFormElement>("#invite-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+  });
+
+  void mountGoogleButton("google-invite-button", async (credential) => {
+    try {
+      const payload = await api<{ user: PublicUser }>("/api/auth/google", {
+        method: "POST",
+        body: JSON.stringify({
+          credential,
+          inviteToken: state.invitePathToken
+        })
+      });
+      state.user = payload.user;
+      state.inviteData = null;
+      state.inviteError = "";
+      if (state.user.needsNickname) {
+        renderNicknameSetup();
+        return;
+      }
+      await loadHome();
+    } catch (inviteError) {
+      state.inviteError = inviteError instanceof Error ? inviteError.message : "Não foi possível concluir o cadastro com Google.";
+      renderInviteRegistration();
+    }
+  }, "Login com Google ainda não configurado.");
+}
+
+function renderInviteAccountCreation(invitation: Invitation | null): void {
+  app.innerHTML = `
+    <main class="login-shell">
+      <form class="login-panel invite-panel" id="invite-create-form">
+        <h1 class="brand">Pugotiread</h1>
+        <p class="muted">Criar conta</p>
         <label class="form-row">
-          <span>Nome de exibição</span>
-          <input class="input" name="displayName" value="${escapeHtml(invitation?.displayName ?? "")}" required />
+          <span>Nickname</span>
+          <input class="input" name="nickname" maxlength="40" autocomplete="nickname" placeholder="Seu nome público" required />
         </label>
         <label class="form-row">
           <span>E-mail</span>
-          <input class="input" name="email" type="email" value="${escapeHtml(invitation?.email ?? "")}" required />
-        </label>
-        <label class="form-row">
-          <span>Usuário</span>
-          <input class="input" name="username" value="${escapeHtml(invitation?.username ?? "")}" required />
+          <input class="input" name="email" type="email" autocomplete="email" value="${escapeHtml(invitation?.email ?? "")}" ${invitation?.email ? "readonly" : ""} required />
         </label>
         <label class="form-row">
           <span>Senha</span>
           <input class="input" name="password" type="password" autocomplete="new-password" required />
         </label>
         <p class="error">${escapeHtml(state.inviteError)}</p>
-        <button class="button" type="submit">Criar conta</button>
+        <div class="invite-form-actions">
+          <button class="button secondary" id="back-to-google-invite" type="button">Voltar</button>
+          <button class="button" type="submit">Criar conta</button>
+        </div>
       </form>
     </main>
   `;
 
-  document.querySelector<HTMLFormElement>("#invite-form")?.addEventListener("submit", async (event) => {
+  document.querySelector("#back-to-google-invite")?.addEventListener("click", () => {
+    state.inviteCreateAccountOpen = false;
+    state.inviteError = "";
+    renderInviteRegistration();
+  });
+
+  document.querySelector<HTMLFormElement>("#invite-create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
     try {
       const payload = await api<{ user: PublicUser }>(`/api/invites/${encodeURIComponent(state.invitePathToken ?? "")}`, {
         method: "POST",
         body: JSON.stringify({
-          email: String(form.get("email")),
-          displayName: String(form.get("displayName")),
-          username: String(form.get("username")),
-          password: String(form.get("password"))
+          nickname: String(form.get("nickname") ?? ""),
+          email: String(form.get("email") ?? ""),
+          password: String(form.get("password") ?? "")
         })
       });
       state.user = payload.user;
       state.inviteData = null;
       state.inviteError = "";
+      state.inviteCreateAccountOpen = false;
       await loadHome();
-    } catch (inviteError) {
-      state.inviteError = inviteError instanceof Error ? inviteError.message : "Não foi possível concluir o cadastro.";
-      renderInviteRegistration();
+    } catch (error) {
+      state.inviteError = error instanceof Error ? error.message : "Não foi possível criar a conta.";
+      renderInviteAccountCreation(invitation);
+    }
+  });
+}
+
+function renderNicknameSetup(error = ""): void {
+  const user = state.user;
+  app.innerHTML = `
+    <main class="login-shell">
+      <form class="login-panel invite-panel" id="nickname-form">
+        <h1 class="brand">Pugotiread</h1>
+        <p class="muted">Digite seu nickname</p>
+        <label class="form-row">
+          <span>Nickname</span>
+          <input class="input" name="nickname" maxlength="40" autocomplete="nickname" placeholder="Seu nome público" required autofocus />
+        </label>
+        <p class="error">${escapeHtml(error)}</p>
+        <button class="button" type="submit">Entrar</button>
+      </form>
+    </main>
+  `;
+
+  document.querySelector<HTMLFormElement>("#nickname-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget as HTMLFormElement);
+    const nickname = String(formData.get("nickname") ?? "").trim();
+    if (!nickname || nickname.length > 40) {
+      renderNicknameSetup("Escolha um nickname com até 40 caracteres.");
+      return;
+    }
+
+    try {
+      const payload = await api<{ user: PublicUser }>("/api/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({
+          avatarUrl: user?.avatarUrl ?? "",
+          nickname,
+          biography: user?.biography ?? "",
+          location: user?.location ?? "",
+          favoriteContentIds: user?.favoriteContentIds ?? []
+        })
+      });
+      state.user = payload.user;
+      await loadHome();
+    } catch (error) {
+      renderNicknameSetup(error instanceof Error ? error.message : "Não foi possível salvar o nickname.");
     }
   });
 }
@@ -496,7 +762,7 @@ function renderShell(): void {
         <div class="topbar-brand">
           <button class="icon-button" id="menu-button" type="button" title="Menu">${renderIcon("menu")}</button>
           <button class="topbar-home" id="home-button" type="button">
-            <span class="brand-badge" aria-hidden="true">${renderIcon("badge")}</span>
+            <span class="brand-badge" aria-hidden="true">${renderSidebarIcon("book", "Pugotiread")}</span>
             <span>Pugotiread</span>
           </button>
         </div>
@@ -544,14 +810,14 @@ function renderShell(): void {
 function renderMainSidebar(): string {
   return `
     <nav class="side-nav" aria-label="Menu principal">
-      ${renderNavButton("home", renderIcon("home"), "Início")}
-      ${renderNavButton("want", renderIcon("want"), "Quero ler")}
-      ${renderNavButton("collections", renderIcon("collections"), "Coleções")}
-      ${renderNavButton("lists", renderIcon("lists"), "Listas de leitura")}
-      ${renderNavButton("bookmarks", renderIcon("bookmarks"), "Marcadores")}
-      ${renderNavButton("all", renderIcon("all"), "Todos os títulos")}
+      ${renderNavButton("home", renderSidebarIcon("home", "Início"), "Início")}
+      ${renderNavButton("want", renderSidebarIcon("want", "Quero ler"), "Quero ler")}
+      ${renderNavButton("collections", renderSidebarIcon("collections", "Coleções"), "Coleções")}
+      ${renderNavButton("lists", renderSidebarIcon("lists", "Listas de leitura"), "Listas de leitura")}
+      ${renderNavButton("bookmarks", renderSidebarIcon("bookmarks", "Marcadores"), "Marcadores")}
+      ${renderNavButton("all", renderSidebarIcon("all", "Todos os títulos"), "Todos os títulos")}
       ${state.user?.role === "admin" ? renderVaultNavButton() : ""}
-      ${renderNavButton("people", renderIcon("people"), "Pessoas")}
+      ${renderNavButton("people", renderSidebarIcon("people", "Pessoas"), "Pessoas")}
     </nav>
     <div class="side-section">
       <p class="nav-title">Bibliotecas</p>
@@ -583,6 +849,7 @@ function renderSettingsSidebar(): string {
               <h3>Servidor</h3>
               ${renderServerSectionButton("libraries", "Bibliotecas")}
               ${renderServerSectionButton("users", "Usuários")}
+              ${renderServerSectionButton("vault", "Cofre pessoal")}
             </div>
           `
           : ""
@@ -653,7 +920,7 @@ function renderLibraryButton(library: Library): string {
   const active = state.activeView === "library" && library.id === state.activeLibraryId ? " active" : "";
   return `
     <button class="nav-button library-button${active}" data-library-id="${library.id}" title="${escapeHtml(library.name)}">
-      <span class="nav-icon" aria-hidden="true">${library.kind === "book" ? renderIcon("libraryBook") : renderIcon("libraryManga")}</span>
+      <span class="nav-icon" aria-hidden="true">${renderSidebarIcon("book", library.name)}</span>
       <span class="nav-label">${escapeHtml(library.name)}</span>
       ${
         state.user?.role === "admin"
@@ -671,7 +938,7 @@ function renderVaultNavButton(): string {
   const active = state.activeView === "vault" ? " active" : "";
   return `
     <button class="nav-button library-button${active}" data-nav-view="vault" title="Cofre pessoal">
-      <span class="nav-icon" aria-hidden="true">${renderIcon("lock")}</span>
+      <span class="nav-icon" aria-hidden="true">${renderSidebarIcon(state.vaultUnlocked ? "vaultOpen" : "vaultClosed", "Cofre pessoal")}</span>
       <span class="nav-label">Cofre pessoal</span>
       <span class="nav-more vault-nav-more" data-vault-menu role="button" tabindex="0" title="Opções do cofre">⋮</span>
       ${state.vaultMenuOpen ? renderVaultContextMenu() : ""}
@@ -750,6 +1017,10 @@ function renderMainView(activeLibrary: Library | undefined, contents: ContentIte
     return renderCollectionsView();
   }
 
+  if (state.activeView === "people") {
+    return renderPeopleView();
+  }
+
   if (state.activeView === "profile") {
     return renderProfileView();
   }
@@ -812,8 +1083,8 @@ function renderVaultView(): string {
         <p class="muted">Bibliotecas pessoais ficam ocultas fora desta área.</p>
       </div>
       <div class="vault-heading-actions">
+        <button class="icon-button vault-lock-button" id="lock-vault-button" type="button" title="Bloquear cofre" aria-label="Bloquear cofre">${renderSidebarIcon("vaultClosed", "Bloquear cofre")}</button>
         <button class="button" id="add-personal-library-button" type="button">+ Biblioteca pessoal</button>
-        <button class="icon-button vault-lock-button" id="lock-vault-button" type="button" title="Bloquear cofre" aria-label="Bloquear cofre">${renderIcon("lock")}</button>
       </div>
     </section>
     ${
@@ -828,11 +1099,17 @@ function renderVaultView(): string {
 function renderPersonalLibraryRow(library: Library): string {
   const contentCount = state.contents.filter((content) => content.libraryId === library.id).length;
   return `
-    <button class="personal-library-row" data-library-id="${escapeHtml(library.id)}" type="button">
-      <span class="nav-icon" aria-hidden="true">${renderIcon("lock")}</span>
-      <strong>${escapeHtml(library.name)}</strong>
-      <span>${contentCount} títulos</span>
-    </button>
+    <article class="personal-library-row">
+      <button class="personal-library-main" data-library-id="${escapeHtml(library.id)}" type="button">
+        <span class="nav-icon" aria-hidden="true">${renderIcon("lock")}</span>
+        <strong>${escapeHtml(library.name)}</strong>
+        <span>${contentCount} títulos</span>
+      </button>
+      <div class="personal-library-actions">
+        <button class="icon-button" data-edit-personal-library="${escapeHtml(library.id)}" type="button" title="Editar biblioteca" aria-label="Editar biblioteca">${renderSidebarIcon("pencil", "Editar biblioteca")}</button>
+        <button class="icon-button danger" data-delete-personal-library="${escapeHtml(library.id)}" type="button" title="Apagar biblioteca" aria-label="Apagar biblioteca">${renderSidebarIcon("trash", "Apagar biblioteca")}</button>
+      </div>
+    </article>
   `;
 }
 
@@ -848,7 +1125,7 @@ function renderProfileView(): string {
           <p>${escapeHtml(user?.biography || "Sem biografia cadastrada.")}</p>
           <span>${escapeHtml(user?.location || "Local não informado")}</span>
         </div>
-        <button class="icon-button profile-edit-button" id="edit-profile-button" type="button" title="Editar perfil">${renderIcon("author")}</button>
+        <button class="icon-button profile-edit-button" id="edit-profile-button" type="button" title="Editar perfil">${renderSidebarIcon("pencil", "Editar perfil")}</button>
       </div>
       ${state.profileEditing ? renderProfileForm(favorites) : ""}
       <section class="settings-panel">
@@ -1017,7 +1294,7 @@ function getSettingsSectionTitle(): string {
   const titles: Record<AppState["settingsSection"], string> = {
     account: "Conta",
     preferences: "Preferências",
-    server: state.serverSection === "users" ? "Usuários" : "Bibliotecas"
+    server: state.serverSection === "users" ? "Usuários" : state.serverSection === "vault" ? "Cofre pessoal" : "Bibliotecas"
   };
 
   return titles[state.settingsSection];
@@ -1028,7 +1305,9 @@ function renderSettingsSection(): string {
     if (state.user?.role !== "admin") {
       return `<p class="empty">Esta área é exclusiva para administradores.</p>`;
     }
-    return state.serverSection === "users" ? renderUsersSettings() : renderLibrariesSettings();
+    if (state.serverSection === "users") return renderUsersSettings();
+    if (state.serverSection === "vault") return renderVaultSettings();
+    return renderLibrariesSettings();
   }
 
   if (state.settingsSection === "account") {
@@ -1095,6 +1374,23 @@ function renderUsersSettings(): string {
   `;
 }
 
+function renderVaultSettings(): string {
+  return `
+    <form class="settings-panel vault-settings-form" id="vault-settings-form">
+      <p class="settings-lead">Defina por quanto tempo o cofre pessoal fica aberto sem atividade antes de bloquear automaticamente.</p>
+      <label class="form-row">
+        <span>Tempo sem atividade em minutos</span>
+        <input class="input" name="vaultTimeoutMinutes" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(state.vaultSettingsDraft)}" required />
+      </label>
+      ${state.vaultSettingsError ? `<p class="error">${escapeHtml(state.vaultSettingsError)}</p>` : ""}
+      ${state.vaultSettingsMessage ? `<p class="scan-message">${escapeHtml(state.vaultSettingsMessage)}</p>` : ""}
+      <div class="settings-actions">
+        <button class="button" type="submit">Salvar configuração</button>
+      </div>
+    </form>
+  `;
+}
+
 function renderInviteBanner(inviteUrl: string): string {
   return `
     <div class="invite-banner">
@@ -1130,8 +1426,8 @@ function renderUserRow(user: PublicUser): string {
         <span class="${user.canChangePassword ? "active" : ""}">Senha</span>
       </div>
       <div class="user-actions">
-        <button class="icon-button" data-edit-user="${escapeHtml(user.id)}" type="button" title="Editar usuário">${renderIcon("author")}</button>
-        <button class="icon-button danger" data-delete-user="${escapeHtml(user.id)}" type="button" title="Apagar usuário">🗑</button>
+        <button class="icon-button" data-edit-user="${escapeHtml(user.id)}" type="button" title="Editar usuário" aria-label="Editar usuário">${renderSidebarIcon("pencil", "Editar usuário")}</button>
+        <button class="icon-button danger" data-delete-user="${escapeHtml(user.id)}" type="button" title="Apagar usuário" aria-label="Apagar usuário">${renderSidebarIcon("trash", "Apagar usuário")}</button>
       </div>
     </article>
   `;
@@ -1153,11 +1449,16 @@ function renderLibrarySettingsRow(library: Library): string {
 }
 
 function renderLibraryModal(): string {
+  const isEditing = Boolean(state.editingLibraryId);
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal-panel library-modal" role="dialog" aria-modal="true" aria-labelledby="library-modal-title">
         <header class="modal-header">
-          <h2 id="library-modal-title">${state.libraryDraft.isPersonal ? "Adicionar biblioteca pessoal" : "Adicionar biblioteca"}</h2>
+          <h2 id="library-modal-title">${
+            isEditing
+              ? (state.libraryDraft.isPersonal ? "Editar biblioteca pessoal" : "Editar biblioteca")
+              : (state.libraryDraft.isPersonal ? "Adicionar biblioteca pessoal" : "Adicionar biblioteca")
+          }</h2>
           <button class="icon-button" id="close-library-modal" type="button" aria-label="Fechar">${renderIcon("close")}</button>
         </header>
         <div class="modal-body">
@@ -1177,7 +1478,7 @@ function renderLibraryModal(): string {
           <button class="button secondary" id="cancel-library-modal" type="button">Cancelar</button>
           ${
             state.libraryModalStep === "advanced"
-              ? `<button class="button" id="create-library-button" type="button">Criar biblioteca</button>`
+              ? `<button class="button" id="create-library-button" type="button">${isEditing ? "Salvar biblioteca" : "Criar biblioteca"}</button>`
               : `<button class="button" id="library-next-button" type="button">Próximo</button>`
           }
         </footer>
@@ -1283,6 +1584,7 @@ function getPreviousLibraryModalStep(step: AppState["libraryModalStep"]): AppSta
 function resetLibraryDraft(): void {
   state.libraryModalStep = "general";
   state.libraryModalError = "";
+  state.editingLibraryId = null;
   state.libraryDraft = { name: "", kind: "manga", path: "", isPersonal: false };
   state.folderBrowser = null;
 }
@@ -1318,6 +1620,31 @@ async function openPersonalLibraryModal(): Promise<void> {
   renderShell();
   try {
     await loadFolderBrowser();
+    renderShell();
+  } catch (error) {
+    state.libraryModalError = error instanceof Error ? error.message : "Não foi possível carregar as pastas.";
+    renderShell();
+  }
+}
+
+async function openPersonalLibraryEditModal(libraryId: string): Promise<void> {
+  const library = state.personalLibraries.find((item) => item.id === libraryId);
+  if (!library) {
+    return;
+  }
+
+  resetLibraryDraft();
+  state.editingLibraryId = library.id;
+  state.libraryDraft = {
+    name: library.name,
+    kind: library.kind,
+    path: library.path,
+    isPersonal: true
+  };
+  state.libraryModalOpen = true;
+  renderShell();
+  try {
+    await loadFolderBrowser(library.path);
     renderShell();
   } catch (error) {
     state.libraryModalError = error instanceof Error ? error.message : "Não foi possível carregar as pastas.";
@@ -1510,6 +1837,31 @@ async function submitAdminUserForm(form: HTMLFormElement): Promise<void> {
     renderShell();
   } catch (error) {
     state.adminUserModalError = error instanceof Error ? error.message : "Não foi possível salvar o usuário.";
+    renderShell();
+  }
+}
+
+async function createLinkOnlyInvite(form: HTMLFormElement): Promise<void> {
+  syncAdminUserDraftFromInputs(form);
+
+  try {
+    state.adminUserModalError = "";
+    state.adminUserInviteUrl = "";
+    const { inviteUrl } = await api<{ inviteUrl: string }>("/api/admin/invites", {
+      method: "POST",
+      body: JSON.stringify({
+        linkOnly: true,
+        allowedLibraryIds: state.adminUserDraft.allowedLibraryIds,
+        canLogin: true,
+        canDownload: true,
+        canChangePassword: false
+      })
+    });
+    state.adminUserInviteUrl = inviteUrl;
+    state.adminUserModalOpen = true;
+    renderShell();
+  } catch (error) {
+    state.adminUserModalError = error instanceof Error ? error.message : "Não foi possível gerar o link de convite.";
     renderShell();
   }
 }
@@ -1803,17 +2155,44 @@ async function refreshPersonalVault(): Promise<void> {
   state.contents = await loadLibraryContents(state.personalLibraries);
 }
 
+async function deletePersonalLibrary(libraryId: string): Promise<void> {
+  const library = state.personalLibraries.find((item) => item.id === libraryId);
+  if (!library || !confirm(`Apagar a biblioteca "${library.name}" do cofre? Os arquivos da pasta não serão removidos.`)) {
+    return;
+  }
+
+  try {
+    await api<void>(`/api/libraries/${encodeURIComponent(libraryId)}`, { method: "DELETE" });
+    state.personalLibraries = state.personalLibraries.filter((item) => item.id !== libraryId);
+    state.contents = state.contents.filter((content) => content.libraryId !== libraryId);
+    if (state.activeLibraryId === libraryId) {
+      state.activeLibraryId = null;
+      state.activeSeriesId = null;
+      state.reader = null;
+      state.activeView = "vault";
+    }
+    renderShell();
+  } catch (error) {
+    state.vaultError = error instanceof Error ? error.message : "Não foi possível apagar a biblioteca.";
+    renderShell();
+  }
+}
+
 async function unlockPersonalVault(form: HTMLFormElement): Promise<void> {
   const formData = new FormData(form);
   try {
     state.vaultError = "";
-    const payload = await api<{ libraries: Library[]; vaultToken: string }>("/api/personal-vault/unlock", {
+    const payload = await api<{ libraries: Library[]; vaultToken: string; vaultTimeoutMinutes: number }>("/api/personal-vault/unlock", {
       method: "POST",
       body: JSON.stringify({ password: String(formData.get("password") ?? "") })
     });
     state.personalLibraries = payload.libraries;
     state.vaultToken = payload.vaultToken;
+    state.vaultTimeoutMinutes = payload.vaultTimeoutMinutes;
+    state.vaultSettingsDraft = String(payload.vaultTimeoutMinutes);
     state.vaultUnlocked = true;
+    lastVaultTouchAt = Date.now();
+    startVaultInactivityTimer();
     state.contents = await loadLibraryContents(payload.libraries);
     renderShell();
   } catch (error) {
@@ -1824,16 +2203,102 @@ async function unlockPersonalVault(form: HTMLFormElement): Promise<void> {
 
 async function lockPersonalVault(): Promise<void> {
   await api<void>("/api/personal-vault/lock", { method: "POST" }).catch(() => undefined);
+  clearVaultInactivityTimer();
   state.vaultUnlocked = false;
   state.vaultToken = "";
   state.vaultError = "";
   state.vaultMenuOpen = false;
+  lastVaultTouchAt = 0;
   state.personalLibraries = [];
   state.contents = [];
   state.activeLibraryId = null;
   state.activeSeriesId = null;
   state.reader = null;
   renderShell();
+}
+
+function clearVaultInactivityTimer(): void {
+  if (vaultInactivityTimer) {
+    window.clearTimeout(vaultInactivityTimer);
+    vaultInactivityTimer = null;
+  }
+}
+
+function startVaultInactivityTimer(): void {
+  clearVaultInactivityTimer();
+  if (!state.vaultUnlocked) {
+    return;
+  }
+
+  vaultInactivityTimer = window.setTimeout(() => {
+    void lockPersonalVault();
+  }, state.vaultTimeoutMinutes * 60 * 1000);
+}
+
+function registerVaultActivity(): void {
+  if (state.vaultUnlocked) {
+    startVaultInactivityTimer();
+    void touchPersonalVault();
+  }
+}
+
+async function touchPersonalVault(): Promise<void> {
+  if (!state.vaultUnlocked || vaultTouchInFlight) {
+    return;
+  }
+
+  const minTouchIntervalMs = Math.max(30_000, Math.min(60_000, state.vaultTimeoutMinutes * 30_000));
+  if (Date.now() - lastVaultTouchAt < minTouchIntervalMs) {
+    return;
+  }
+
+  vaultTouchInFlight = true;
+  try {
+    const payload = await api<{ vaultToken: string; vaultTimeoutMinutes: number }>("/api/personal-vault/touch", { method: "POST" });
+    state.vaultToken = payload.vaultToken;
+    state.vaultTimeoutMinutes = payload.vaultTimeoutMinutes;
+    state.vaultSettingsDraft = String(payload.vaultTimeoutMinutes);
+    lastVaultTouchAt = Date.now();
+  } catch {
+    await lockPersonalVault();
+  } finally {
+    vaultTouchInFlight = false;
+  }
+}
+
+async function saveVaultSettings(form: HTMLFormElement): Promise<void> {
+  const formData = new FormData(form);
+  const rawMinutes = String(formData.get("vaultTimeoutMinutes") ?? "").trim();
+  const minutes = Number(rawMinutes);
+  state.vaultSettingsDraft = rawMinutes;
+
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    state.vaultSettingsError = "Informe um número inteiro maior que zero.";
+    state.vaultSettingsMessage = "";
+    renderShell();
+    return;
+  }
+
+  try {
+    const { settings } = await api<{ settings: ServerSettings }>("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ vaultTimeoutMinutes: minutes })
+    });
+    state.vaultTimeoutMinutes = settings.vaultTimeoutMinutes;
+    state.vaultSettingsDraft = String(settings.vaultTimeoutMinutes);
+    state.vaultSettingsError = "";
+    state.vaultSettingsMessage = "Configuração salva.";
+    if (state.vaultUnlocked) {
+      lastVaultTouchAt = 0;
+      startVaultInactivityTimer();
+      void touchPersonalVault();
+    }
+    renderShell();
+  } catch (error) {
+    state.vaultSettingsError = error instanceof Error ? error.message : "Não foi possível salvar a configuração.";
+    state.vaultSettingsMessage = "";
+    renderShell();
+  }
 }
 
 async function scanLibraryById(libraryId: string): Promise<void> {
@@ -2040,6 +2505,104 @@ function renderCollectionsView(): string {
   `;
 }
 
+function getUserLabel(user: PublicUser): string {
+  return user.nickname || user.displayName || user.username || "Usuário";
+}
+
+function renderPeopleView(): string {
+  if (state.activePeopleUserId) {
+    const user = state.peopleUsers.find((item) => item.id === state.activePeopleUserId);
+    if (user) {
+      return renderPublicUserProfile(user);
+    }
+  }
+
+  const ownedCollections = state.collections.filter((collection) => collection.userId === state.user?.id);
+  const people = state.peopleUsers.filter((user) => user.id !== state.user?.id);
+  const sharedCollections = ownedCollections.filter((collection) => collection.sharedWithUserIds.length > 0);
+
+  return `
+    <section class="section-heading">
+      <div>
+        <h2>Pessoas</h2>
+        <p class="muted">Compartilhe suas coleções pessoais com outros usuários.</p>
+      </div>
+      <span class="muted">${people.length} pessoas</span>
+    </section>
+    ${state.peopleShareError ? `<p class="error">${escapeHtml(state.peopleShareError)}</p>` : ""}
+    ${
+      ownedCollections.length
+        ? people.length
+          ? sharedCollections.length
+            ? `<div class="people-list">${people.map((user) => renderPersonCard(user, sharedCollections)).join("")}</div>`
+            : `<p class="empty">Nenhuma coleção compartilhada ainda.</p>`
+          : `<p class="empty">Nenhum outro usuário cadastrado.</p>`
+        : `<p class="empty">Crie uma coleção pessoal antes de compartilhar com outras pessoas.</p>`
+    }
+  `;
+}
+
+function renderPersonCard(user: PublicUser, sharedCollections: UserCollection[]): string {
+  const userName = getUserLabel(user);
+  const visibleCollections = sharedCollections.filter((collection) => collection.sharedWithUserIds.includes(user.id));
+  if (visibleCollections.length === 0) {
+    return "";
+  }
+
+  return `
+    <article class="person-card">
+      <button class="person-card-open" data-open-person="${escapeHtml(user.id)}" type="button">
+        ${renderAvatar(user, "avatar user-avatar")}
+        <div>
+          <h3>${escapeHtml(userName)}</h3>
+          <p>${escapeHtml(user.username)}</p>
+        </div>
+      </button>
+      <div class="person-collection-list">
+        ${visibleCollections.map((collection) => `<span class="person-collection-pill">${escapeHtml(collection.name)}</span>`).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderPublicUserProfile(user: PublicUser): string {
+  const userName = getUserLabel(user);
+  const sharedCollections = state.collections.filter(
+    (collection) => collection.userId === state.user?.id && collection.sharedWithUserIds.includes(user.id)
+  );
+  const favorites = getContentsByIds(user.favoriteContentIds);
+
+  return `
+    <section class="profile-page public-profile-page">
+      <button class="button secondary" id="back-to-people" type="button">Voltar</button>
+      <div class="profile-hero">
+        ${renderAvatar(user, "profile-avatar")}
+        <div class="profile-hero-info">
+          <h2>${escapeHtml(userName)}</h2>
+          <p>${escapeHtml(user.biography || "Sem biografia.")}</p>
+          ${user.location ? `<span>${escapeHtml(user.location)}</span>` : ""}
+        </div>
+      </div>
+      <section class="profile-section">
+        <h3>Coleções compartilhadas</h3>
+        ${
+          sharedCollections.length
+            ? `<div class="person-collection-list">${sharedCollections.map((collection) => `<span class="person-collection-pill">${escapeHtml(collection.name)}</span>`).join("")}</div>`
+            : `<p class="empty compact">Nenhuma coleção compartilhada.</p>`
+        }
+      </section>
+      <section class="profile-section">
+        <h3>Obras preferidas</h3>
+        ${
+          favorites.length
+            ? `<div class="profile-favorites">${favorites.map(renderProfileFavorite).join("")}</div>`
+            : `<p class="empty compact">Nenhuma obra preferida definida.</p>`
+        }
+      </section>
+    </section>
+  `;
+}
+
 function renderCollectionSection(collection: UserCollection): string {
   const contents = getContentsByIds(collection.contentIds);
   const editing = state.editingCollectionId === collection.id;
@@ -2062,8 +2625,8 @@ function renderCollectionSection(collection: UserCollection): string {
                   owner
                     ? `
                       <button class="icon-button collection-share-button" data-share-collection="${escapeHtml(collection.id)}" type="button" title="Compartilhar coleção">${renderIcon("share")}</button>
-                      <button class="icon-button collection-edit-button" data-edit-collection="${escapeHtml(collection.id)}" type="button" title="Editar coleção">${renderIcon("author")}</button>
-                      <button class="icon-button collection-delete-button" data-delete-collection="${escapeHtml(collection.id)}" type="button" title="Apagar coleção">🗑</button>
+                      <button class="icon-button collection-edit-button" data-edit-collection="${escapeHtml(collection.id)}" type="button" title="Editar coleção" aria-label="Editar coleção">${renderSidebarIcon("pencil", "Editar coleção")}</button>
+                      <button class="icon-button collection-delete-button" data-delete-collection="${escapeHtml(collection.id)}" type="button" title="Apagar coleção" aria-label="Apagar coleção">${renderSidebarIcon("trash", "Apagar coleção")}</button>
                     `
                     : ""
                 }
@@ -2242,7 +2805,12 @@ function renderAdminUserModal(): string {
               </label>
               ${
                 isInvite
-                  ? `<div class="modal-help user-modal-note">O usuário vai definir a senha ao concluir o cadastro pelo link de convite.</div>`
+                  ? `
+                    <div class="modal-help user-modal-note">Preencha os campos ou gere um link único direto.</div>
+                    <div class="invite-link-only">
+                      <button class="button secondary" id="create-link-invite-button" type="button">Convidar com link</button>
+                    </div>
+                  `
                   : `
                     <label class="form-row">
                       <span>${isEdit ? "Nova senha" : "Senha"}</span>
@@ -2282,13 +2850,19 @@ function renderAdminUserModal(): string {
                     </label>
                   `
               }
-              <label class="toggle-row">
-                <input type="checkbox" name="canChangePassword" ${state.adminUserDraft.canChangePassword ? "checked" : ""} />
-                <span>Permitir alterar a própria senha</span>
-              </label>
+              ${
+                isInvite
+                  ? ""
+                  : `
+                    <label class="toggle-row">
+                      <input type="checkbox" name="canChangePassword" ${state.adminUserDraft.canChangePassword ? "checked" : ""} />
+                      <span>Permitir alterar a própria senha</span>
+                    </label>
+                  `
+              }
             </div>
             ${state.adminUserModalError ? `<p class="error">${escapeHtml(state.adminUserModalError)}</p>` : ""}
-            ${state.adminUserInviteUrl ? `<div class="invite-banner compact"><strong>Convite gerado</strong><input class="input" value="${escapeHtml(state.adminUserInviteUrl)}" readonly /></div>` : ""}
+            ${state.adminUserInviteUrl ? `<div class="invite-banner compact"><strong>Convite gerado</strong><button class="button secondary" data-copy-invite type="button">Copiar link</button></div>` : ""}
           </div>
           <footer class="modal-actions">
             <button class="button secondary" id="cancel-user-modal" type="button">Cancelar</button>
@@ -2869,6 +3443,22 @@ function bindShellEvents(): void {
     void openPersonalLibraryModal();
   });
 
+  document.querySelectorAll<HTMLButtonElement>("[data-edit-personal-library]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openPersonalLibraryEditModal(button.dataset.editPersonalLibrary ?? "");
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-delete-personal-library]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void deletePersonalLibrary(button.dataset.deletePersonalLibrary ?? "");
+    });
+  });
+
   document.querySelector("#vault-unlock-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void unlockPersonalVault(event.currentTarget as HTMLFormElement);
@@ -2914,11 +3504,31 @@ function bindShellEvents(): void {
     event.preventDefault();
     void submitAdminUserForm(event.currentTarget as HTMLFormElement);
   });
+
+  document.querySelector("#create-link-invite-button")?.addEventListener("click", (event) => {
+    const form = (event.currentTarget as HTMLElement).closest("form");
+    if (form instanceof HTMLFormElement) {
+      void createLinkOnlyInvite(form);
+    }
+  });
   document.querySelector("#close-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
   document.querySelector("#cancel-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
   document.querySelector("#confirm-user-delete")?.addEventListener("click", () => {
     void deleteAdminUser();
   });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-open-person]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.activePeopleUserId = button.dataset.openPerson ?? null;
+      renderShell();
+    });
+  });
+
+  document.querySelector("#back-to-people")?.addEventListener("click", () => {
+    state.activePeopleUserId = null;
+    renderShell();
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-edit-user]").forEach((button) => {
     button.addEventListener("click", () => {
       openAdminUserModal("edit", button.dataset.editUser ?? null);
@@ -3088,20 +3698,26 @@ function bindShellEvents(): void {
       return;
     }
     try {
-      const { library } = await api<{ library: Library }>("/api/libraries", {
-        method: "POST",
-        body: JSON.stringify({
-          name: state.libraryDraft.name,
-          kind: state.libraryDraft.kind,
-          path: state.libraryDraft.path,
-          isPersonal: state.libraryDraft.isPersonal
-        })
-      });
+      const editingLibraryId = state.editingLibraryId;
+      const { library } = await api<{ library: Library }>(
+        editingLibraryId ? `/api/libraries/${encodeURIComponent(editingLibraryId)}` : "/api/libraries",
+        {
+          method: editingLibraryId ? "PATCH" : "POST",
+          body: JSON.stringify({
+            name: state.libraryDraft.name,
+            kind: state.libraryDraft.kind,
+            path: state.libraryDraft.path,
+            isPersonal: state.libraryDraft.isPersonal
+          })
+        }
+      );
       const wasPersonal = state.libraryDraft.isPersonal;
       state.libraryModalOpen = false;
       resetLibraryDraft();
       if (wasPersonal) {
-        state.personalLibraries = [...state.personalLibraries, library];
+        state.personalLibraries = editingLibraryId
+          ? state.personalLibraries.map((item) => item.id === library.id ? library : item)
+          : [...state.personalLibraries, library];
         await refreshPersonalVault();
       } else {
         await refreshLibraries();
@@ -3115,11 +3731,13 @@ function bindShellEvents(): void {
 
   document.querySelector("#logout-button")?.addEventListener("click", async () => {
     await api<void>("/api/logout", { method: "POST" });
+    clearVaultInactivityTimer();
     state.user = null;
     state.personalLibraries = [];
     state.vaultUnlocked = false;
     state.vaultToken = "";
     state.vaultError = "";
+    lastVaultTouchAt = 0;
     state.accountMenuOpen = false;
     renderLogin();
   });
@@ -3178,6 +3796,7 @@ function bindShellEvents(): void {
       state.openSeriesMenuId = null;
       state.openSeriesAddMenuId = null;
       state.openSeriesRemoveMenuId = null;
+      state.activePeopleUserId = null;
       state.vaultMenuOpen = false;
       state.reader = null;
       renderShell();
@@ -3210,6 +3829,11 @@ function bindShellEvents(): void {
       state.serverSection = nextSection;
       renderShell();
     });
+  });
+
+  document.querySelector("#vault-settings-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveVaultSettings(event.currentTarget as HTMLFormElement);
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-library-id]").forEach((button) => {

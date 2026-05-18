@@ -49,6 +49,23 @@ export async function sendFile(res: ServerResponse, filePath: string): Promise<v
 export async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  if (requestedPath.startsWith("/icons/")) {
+    const iconPath = path.resolve(config.iconsDir, `.${decodeURIComponent(requestedPath.slice("/icons".length))}`);
+    if (!iconPath.startsWith(path.resolve(config.iconsDir))) {
+      sendJson(res, 403, { error: "Acesso negado." });
+      return;
+    }
+
+    try {
+      const file = await fs.readFile(iconPath);
+      res.writeHead(200, { "Content-Type": contentTypes.get(path.extname(iconPath).toLowerCase()) ?? "application/octet-stream" });
+      res.end(file);
+    } catch {
+      sendJson(res, 404, { error: "Ícone não encontrado." });
+    }
+    return;
+  }
+
   const baseDir = requestedPath === "/app.js" ? config.clientDir : config.publicDir;
   const filePath = path.resolve(baseDir, `.${requestedPath}`);
 
