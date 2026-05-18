@@ -1,0 +1,1198 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import http from "node:http";
+import path from "node:path";
+import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, setSessionCookie, toPublicUser, verifyPassword } from "./auth.js";
+import { config } from "./config.js";
+import { readJson, sendFile, sendJson, sendNoContent, serveStatic } from "./http.js";
+import { getContentCoverPath, getContentPagePath, scanLibrary } from "./media.js";
+import { store } from "./store.js";
+import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PublicContentReview, User } from "../shared/types.js";
+
+function isPersonalLibrary(library: Library): boolean {
+  return Boolean(library.isPersonal);
+}
+
+function getVisibleLibraries(user: User, libraries: Library[]): Library[] {
+  const regularLibraries = libraries.filter((library) => !isPersonalLibrary(library));
+  return user.role === "admin"
+    ? regularLibraries
+    : regularLibraries.filter((library) => user.allowedLibraryIds.includes(library.id));
+}
+
+function getPersonalLibraries(user: User, libraries: Library[]): Library[] {
+  return libraries.filter((library) => isPersonalLibrary(library) && library.ownerUserId === user.id);
+}
+
+function createVaultToken(userId: string): string {
+  const payload = `${userId}.${Date.now() + 15 * 60 * 1000}`;
+  const signature = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function hasValidVaultToken(req: http.IncomingMessage, user: User): boolean {
+  const token = req.headers["x-vault-token"] ?? getCookie(req, "pugotiread_vault");
+  if (typeof token !== "string") {
+    return false;
+  }
+
+  const [userId, expiresAt, signature] = token.split(".");
+  if (userId !== user.id || !expiresAt || !signature || Number(expiresAt) < Date.now()) {
+    return false;
+  }
+
+  const payload = `${userId}.${expiresAt}`;
+  const expectedSignature = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("base64url");
+  if (signature.length !== expectedSignature.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+}
+
+function getRequestLibrary(user: User, libraries: Library[], libraryId: string, req: http.IncomingMessage): Library | null {
+  const library = libraries.find((item) => item.id === libraryId) ?? null;
+  if (!library) {
+    return null;
+  }
+
+  if (isPersonalLibrary(library)) {
+    return library.ownerUserId === user.id && hasValidVaultToken(req, user) ? library : null;
+  }
+
+  return user.role === "admin" || user.allowedLibraryIds.includes(library.id) ? library : null;
+}
+
+function findVisibleLibraryForContentId(user: User, libraries: Library[], contentId: string): Library | null {
+  return getVisibleLibraries(user, libraries).find((item) => contentId.startsWith(`${item.id}:`)) ?? null;
+}
+
+async function findVisibleContent(user: User, contentId: string): Promise<{ library: Library; pageCount: number } | null> {
+  const data = await store.read();
+  const library = findVisibleLibraryForContentId(user, data.libraries, contentId);
+  if (!library) {
+    return null;
+  }
+
+  const contents = await scanLibrary(library);
+  const content = contents.find((item) => item.id === contentId);
+  return content ? { library, pageCount: content.pageCount } : null;
+}
+
+async function findRequestContent(user: User, contentId: string, req: http.IncomingMessage): Promise<{ library: Library; pageCount: number } | null> {
+  const data = await store.read();
+  const libraryId = contentId.split(":")[0] ?? "";
+  const library = getRequestLibrary(user, data.libraries, libraryId, req);
+  if (!library) {
+    return null;
+  }
+
+  const contents = await scanLibrary(library);
+  const content = contents.find((item) => item.id === contentId);
+  return content ? { library, pageCount: content.pageCount } : null;
+}
+
+function parseContentPagePath(pathname: string): { contentId: string; pageIndex: number } | null {
+  const match = pathname.match(/^\/api\/contents\/(.+)\/pages\/(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    contentId: decodeURIComponent(match[1] ?? ""),
+    pageIndex: Number(match[2])
+  };
+}
+
+function parseContentCoverPath(pathname: string): { contentId: string } | null {
+  const match = pathname.match(/^\/api\/contents\/(.+)\/cover$/);
+  if (!match) {
+    return null;
+  }
+
+  return { contentId: decodeURIComponent(match[1] ?? "") };
+}
+
+function slugify(value: string): string {
+  return value
+    .normalize("NFD")
+    .replaceAll(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function makeLibraryId(name: string, existing: Library[]): string {
+  const base = slugify(name) || "biblioteca";
+  let next = base;
+  let counter = 2;
+
+  while (existing.some((library) => library.id === next)) {
+    next = `${base}-${counter}`;
+    counter += 1;
+  }
+
+  return next;
+}
+
+function makeUserId(base: string, existing: User[]): string {
+  const normalized = slugify(base) || "user";
+  let next = normalized;
+  let counter = 2;
+  while (existing.some((user) => user.id === next)) {
+    next = `${normalized}-${counter}`;
+    counter += 1;
+  }
+  return next;
+}
+
+function makeInviteToken(): string {
+  return crypto.randomBytes(18).toString("hex");
+}
+
+function sanitizeLibraryIds(libraryIds: string[], libraries: Library[]): string[] {
+  const allowed = new Set(libraries.map((library) => library.id));
+  return Array.from(new Set(libraryIds.filter((id) => allowed.has(id))));
+}
+
+function buildUserFromInput(body: {
+  email?: string;
+  displayName?: string;
+  username?: string;
+  password?: string;
+  role?: User["role"];
+  allowedLibraryIds?: string[];
+  canLogin?: boolean;
+  canDownload?: boolean;
+  canChangePassword?: boolean;
+  passwordHash?: string;
+}, existingUsers: User[], libraries: Library[]): User {
+  const username = body.username?.trim() ?? "";
+  const displayName = body.displayName?.trim() || username;
+  const email = body.email?.trim() ?? "";
+  const allowedLibraryIds = sanitizeLibraryIds(body.allowedLibraryIds ?? [], libraries);
+
+  if (!username) {
+    throw new Error("Informe o usuário.");
+  }
+
+  if (!email) {
+    throw new Error("Informe o e-mail.");
+  }
+
+  return {
+    id: makeUserId(username, existingUsers),
+    username,
+    displayName,
+    email,
+    avatarUrl: "",
+    nickname: "",
+    biography: "",
+    location: "",
+    favoriteContentIds: [],
+    canLogin: body.canLogin ?? true,
+    canDownload: body.canDownload ?? true,
+    canChangePassword: body.canChangePassword ?? true,
+    lastActiveAt: null,
+    role: body.role ?? "user",
+    passwordHash: body.passwordHash ?? hashPassword(body.password ?? ""),
+    allowedLibraryIds
+  };
+}
+
+function makeCollectionId(name: string, userId: string, existing: ContentCollection[]): string {
+  const base = slugify(name) || "colecao";
+  let next = base;
+  let counter = 2;
+
+  while (existing.some((collection) => collection.userId === userId && collection.id === next)) {
+    next = `${base}-${counter}`;
+    counter += 1;
+  }
+
+  return next;
+}
+
+function makePublicReview(review: ContentReview, user: User): PublicContentReview {
+  return {
+    userId: review.userId,
+    contentId: review.contentId,
+    displayName: user.displayName,
+    role: user.role,
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt
+  };
+}
+
+function makePublicCollection(collection: ContentCollection, owner?: User): Pick<ContentCollection, "id" | "userId" | "name" | "description" | "sharedWithUserIds" | "contentIds"> & { ownerDisplayName: string } {
+  return {
+    id: collection.id,
+    userId: collection.userId,
+    name: collection.name,
+    description: collection.description,
+    sharedWithUserIds: collection.sharedWithUserIds,
+    ownerDisplayName: owner?.displayName ?? "Usuário",
+    contentIds: collection.contentIds
+  };
+}
+
+function isLibraryKind(value: string): value is LibraryKind {
+  return value === "manga" || value === "manhwa" || value === "book";
+}
+
+function isInsideMediaRoot(candidatePath: string): boolean {
+  const relative = path.relative(path.resolve(config.mediaRoot), path.resolve(candidatePath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function readMediaDirectory(requestedPath: string): Promise<{ path: string; parent: string | null; directories: Array<{ name: string; path: string }> }> {
+  const safePath = path.resolve(requestedPath || config.mediaRoot);
+  if (!isInsideMediaRoot(safePath)) {
+    throw new Error("Pasta fora da raiz de mídia.");
+  }
+
+  const entries = await fs.readdir(safePath, { withFileTypes: true });
+  const directories = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      name: entry.name,
+      path: path.join(safePath, entry.name)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true }));
+  const parent = path.resolve(safePath) === path.resolve(config.mediaRoot) ? null : path.dirname(safePath);
+
+  return { path: safePath, parent, directories };
+}
+
+async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const user = await getCurrentUser(req);
+
+  if (url.pathname === "/api/login" && req.method === "POST") {
+    const body = await readJson<{ username: string; password: string }>(req);
+    const data = await store.read();
+    const found = data.users.find((item) => item.username === body.username);
+
+    if (!found || !verifyPassword(found, body.password)) {
+      sendJson(res, 401, { error: "Usuário ou senha inválidos." });
+      return;
+    }
+
+    if (!found.canLogin) {
+      sendJson(res, 403, { error: "Esta conta está bloqueada para login." });
+      return;
+    }
+
+    found.lastActiveAt = new Date().toISOString();
+    await store.write(data);
+
+    setSessionCookie(res, createSessionToken(found.id));
+    sendJson(res, 200, { user: toPublicUser(found) });
+    return;
+  }
+
+  if (url.pathname === "/api/logout" && req.method === "POST") {
+    clearSessionCookie(res);
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/invites/") && req.method === "GET") {
+    const token = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const data = await store.read();
+    const invitation = data.invitations.find((item) => item.token === token && !item.usedAt);
+    if (!invitation) {
+      sendJson(res, 404, { error: "Convite não encontrado." });
+      return;
+    }
+
+    sendJson(res, 200, { invitation });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/invites/") && req.method === "POST") {
+    const token = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ email: string; displayName: string; username: string; password: string }>(req);
+    const data = await store.read();
+    const invitation = data.invitations.find((item) => item.token === token && !item.usedAt);
+    if (!invitation) {
+      sendJson(res, 404, { error: "Convite não encontrado." });
+      return;
+    }
+
+    const email = body.email?.trim() ?? "";
+    const displayName = body.displayName?.trim() ?? body.username?.trim() ?? "";
+    const username = body.username?.trim() ?? "";
+    const password = body.password?.trim() ?? "";
+
+    if (!email || !displayName || !username || !password) {
+      sendJson(res, 400, { error: "Preencha e-mail, nome, usuário e senha." });
+      return;
+    }
+
+    if (data.users.some((item) => item.username === username)) {
+      sendJson(res, 400, { error: "Usuário já existe." });
+      return;
+    }
+
+    const user = await store.createUser({
+      id: makeUserId(username, data.users),
+      username,
+      displayName,
+      email,
+      avatarUrl: "",
+      nickname: "",
+      biography: "",
+      location: "",
+      favoriteContentIds: [],
+      canLogin: invitation.canLogin,
+      canDownload: invitation.canDownload,
+      canChangePassword: invitation.canChangePassword,
+      lastActiveAt: null,
+      role: "user",
+      passwordHash: hashPassword(password),
+      allowedLibraryIds: invitation.allowedLibraryIds
+    });
+
+    await store.consumeInvitation(token);
+    sendJson(res, 201, { user: toPublicUser(user) });
+    return;
+  }
+
+  if (!user) {
+    sendJson(res, 401, { error: "Login necessário." });
+    return;
+  }
+
+  if (url.pathname === "/api/me" && req.method === "GET") {
+    sendJson(res, 200, { user: toPublicUser(user) });
+    return;
+  }
+
+  if (url.pathname === "/api/me/password" && req.method === "PATCH") {
+    const body = await readJson<{ currentPassword: string; newPassword: string }>(req);
+    if (!user.canChangePassword) {
+      sendJson(res, 403, { error: "Esta conta não pode alterar a própria senha." });
+      return;
+    }
+
+    if (!verifyPassword(user, body.currentPassword ?? "") || !body.newPassword?.trim()) {
+      sendJson(res, 400, { error: "Senha atual inválida." });
+      return;
+    }
+
+    await store.updateUser(user.id, { passwordHash: hashPassword(body.newPassword.trim()) });
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/personal-vault/unlock" && req.method === "POST") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem acessar o cofre pessoal." });
+      return;
+    }
+
+    const body = await readJson<{ password: string }>(req);
+    if (!verifyPassword(user, body.password ?? "")) {
+      sendJson(res, 400, { error: "Senha inválida." });
+      return;
+    }
+
+    const data = await store.read();
+    const vaultToken = createVaultToken(user.id);
+    res.setHeader("Set-Cookie", `pugotiread_vault=${encodeURIComponent(vaultToken)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=900`);
+    sendJson(res, 200, {
+      libraries: getPersonalLibraries(user, data.libraries),
+      vaultToken
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/personal-vault/lock" && req.method === "POST") {
+    res.setHeader("Set-Cookie", "pugotiread_vault=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/me/profile" && req.method === "PATCH") {
+    const body = await readJson<{
+      avatarUrl?: string;
+      nickname?: string;
+      biography?: string;
+      location?: string;
+      favoriteContentIds?: string[];
+    }>(req);
+    const avatarUrl = body.avatarUrl?.trim() ?? "";
+    const nickname = body.nickname?.trim() ?? "";
+    const biography = body.biography?.trim() ?? "";
+    const location = body.location?.trim() ?? "";
+    const favoriteContentIds = Array.from(new Set(body.favoriteContentIds ?? [])).slice(0, 3);
+
+    if (avatarUrl.length > 500_000) {
+      sendJson(res, 400, { error: "A imagem do avatar é muito grande." });
+      return;
+    }
+
+    if (nickname.length > 40 || biography.length > 280 || location.length > 80) {
+      sendJson(res, 400, { error: "Confira os limites dos campos do perfil." });
+      return;
+    }
+
+    const data = await store.read();
+    const visibleLibraryIds = new Set(getVisibleLibraries(user, data.libraries).map((library) => library.id));
+    if (favoriteContentIds.some((contentId) => !visibleLibraryIds.has(contentId.split(":")[0] ?? ""))) {
+      sendJson(res, 400, { error: "Uma das obras favoritas não está disponível para este usuário." });
+      return;
+    }
+
+    const updated = await store.updateUserProfile(user.id, {
+      avatarUrl,
+      nickname,
+      biography,
+      location,
+      favoriteContentIds
+    });
+
+    if (!updated) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    sendJson(res, 200, { user: toPublicUser(updated) });
+    return;
+  }
+
+  if (url.pathname === "/api/me/reviews" && req.method === "GET") {
+    const data = await store.read();
+    const reviews = data.reviews
+      .filter((review) => review.userId === user.id)
+      .filter((review) => Boolean(findVisibleLibraryForContentId(user, data.libraries, review.contentId)))
+      .map((review) => makePublicReview(review, user))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+    sendJson(res, 200, { reviews });
+    return;
+  }
+
+  if (url.pathname === "/api/users" && req.method === "GET") {
+    const data = await store.read();
+    sendJson(res, 200, { users: data.users.map(toPublicUser) });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/users" && req.method === "GET") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem ver usuários." });
+      return;
+    }
+
+    const data = await store.read();
+    sendJson(res, 200, { users: data.users.map(toPublicUser), libraries: getVisibleLibraries(user, data.libraries) });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/users" && req.method === "POST") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem criar usuários." });
+      return;
+    }
+
+    const body = await readJson<{
+      email: string;
+      displayName: string;
+      username: string;
+      password: string;
+      allowedLibraryIds: string[];
+      canLogin: boolean;
+      canDownload: boolean;
+      canChangePassword: boolean;
+    }>(req);
+    const data = await store.read();
+
+    if (data.users.some((item) => item.username === body.username?.trim())) {
+      sendJson(res, 400, { error: "Usuário já existe." });
+      return;
+    }
+
+    try {
+      const created = await store.createUser(buildUserFromInput({
+        email: body.email,
+        displayName: body.displayName,
+        username: body.username,
+        password: body.password,
+        allowedLibraryIds: body.allowedLibraryIds,
+        canLogin: body.canLogin,
+        canDownload: body.canDownload,
+        canChangePassword: body.canChangePassword
+      }, data.users, data.libraries));
+      sendJson(res, 201, { user: toPublicUser(created) });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Não foi possível criar o usuário." });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/admin/invites" && req.method === "POST") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem criar convites." });
+      return;
+    }
+
+    const body = await readJson<{
+      email: string;
+      displayName: string;
+      username: string;
+      allowedLibraryIds: string[];
+      canLogin: boolean;
+      canDownload: boolean;
+      canChangePassword: boolean;
+    }>(req);
+    const data = await store.read();
+
+    try {
+      const token = makeInviteToken();
+      const invitation: Invitation = {
+        token,
+        email: body.email?.trim() ?? "",
+        displayName: body.displayName?.trim() ?? body.username?.trim() ?? "",
+        username: body.username?.trim() ?? "",
+        allowedLibraryIds: sanitizeLibraryIds(body.allowedLibraryIds ?? [], data.libraries),
+        canLogin: body.canLogin ?? true,
+        canDownload: body.canDownload ?? true,
+        canChangePassword: body.canChangePassword ?? true,
+        createdAt: new Date().toISOString(),
+        usedAt: null
+      };
+
+      if (!invitation.email || !invitation.displayName || !invitation.username) {
+        sendJson(res, 400, { error: "Preencha e-mail, nome e usuário." });
+        return;
+      }
+
+      await store.createInvitation(invitation);
+      sendJson(res, 201, { invitation, inviteUrl: `${new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`).origin}/invite/${token}` });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Não foi possível gerar o convite." });
+    }
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/admin/users/") && req.method === "PATCH") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem editar usuários." });
+      return;
+    }
+
+    const userId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{
+      email?: string;
+      displayName?: string;
+      username?: string;
+      password?: string;
+      allowedLibraryIds?: string[];
+      canLogin?: boolean;
+      canDownload?: boolean;
+      canChangePassword?: boolean;
+    }>(req);
+    const data = await store.read();
+    const existing = data.users.find((item) => item.id === userId);
+    if (!existing) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    const updates: Partial<User> = {};
+    if (body.email !== undefined) updates.email = body.email.trim();
+    if (body.displayName !== undefined) updates.displayName = body.displayName.trim();
+    if (body.username !== undefined) updates.username = body.username.trim();
+    if (body.allowedLibraryIds !== undefined) updates.allowedLibraryIds = sanitizeLibraryIds(body.allowedLibraryIds, data.libraries);
+    if (body.canLogin !== undefined) updates.canLogin = Boolean(body.canLogin);
+    if (body.canDownload !== undefined) updates.canDownload = Boolean(body.canDownload);
+    if (body.canChangePassword !== undefined) updates.canChangePassword = Boolean(body.canChangePassword);
+    if (body.password?.trim()) updates.passwordHash = hashPassword(body.password.trim());
+
+    const updated = await store.updateUser(userId, updates);
+    if (!updated) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    sendJson(res, 200, { user: toPublicUser(updated) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/admin/users/") && req.method === "DELETE") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem remover usuários." });
+      return;
+    }
+
+    const userId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    if (userId === user.id) {
+      sendJson(res, 400, { error: "Você não pode remover sua própria conta." });
+      return;
+    }
+
+    const deleted = await store.deleteUser(userId);
+    if (!deleted) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/libraries" && req.method === "GET") {
+    const data = await store.read();
+    const libraries = getVisibleLibraries(user, data.libraries);
+
+    sendJson(res, 200, { libraries });
+    return;
+  }
+
+  if (url.pathname === "/api/libraries" && req.method === "POST") {
+    const body = await readJson<{ name: string; kind: string; path: string; isPersonal?: boolean }>(req);
+    const isPersonal = Boolean(body.isPersonal);
+    if (isPersonal && user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem criar bibliotecas pessoais." });
+      return;
+    }
+    if (user.role !== "admin" && !isPersonal) {
+      sendJson(res, 403, { error: "Apenas administradores podem criar bibliotecas públicas." });
+      return;
+    }
+    const name = body.name?.trim();
+    const libraryPath = body.path?.trim();
+    if (!name || !libraryPath || !isLibraryKind(body.kind)) {
+      sendJson(res, 400, { error: "Nome, tipo e pasta são obrigatórios." });
+      return;
+    }
+
+    if (!isInsideMediaRoot(libraryPath)) {
+      sendJson(res, 400, { error: `A pasta deve estar dentro de ${config.mediaRoot}.` });
+      return;
+    }
+
+    const stat = await fs.stat(libraryPath).catch(() => null);
+    if (!stat?.isDirectory()) {
+      sendJson(res, 400, { error: "A pasta selecionada não existe ou não é um diretório." });
+      return;
+    }
+
+    const data = await store.read();
+    const candidateLibrary: Library = {
+      id: makeLibraryId(name, data.libraries),
+      name,
+      kind: body.kind,
+      path: libraryPath,
+      isPersonal,
+      ownerUserId: isPersonal ? user.id : null
+    };
+    const detectedContents = await scanLibrary(candidateLibrary);
+    if (detectedContents.length === 0) {
+      sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+      return;
+    }
+
+    const library = await store.createLibrary({
+      id: candidateLibrary.id,
+      name,
+      kind: body.kind,
+      path: libraryPath,
+      isPersonal,
+      ownerUserId: isPersonal ? user.id : null
+    });
+
+    sendJson(res, 201, { library });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/folders" && req.method === "GET") {
+    try {
+      const requestedPath = url.searchParams.get("path") ?? (url.searchParams.get("scope") === "vault" ? config.vaultMediaRoot : config.mediaRoot);
+      sendJson(res, 200, await readMediaDirectory(requestedPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Não foi possível ler a pasta." });
+    }
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/libraries/") && url.pathname.endsWith("/contents") && req.method === "GET") {
+    const libraryId = url.pathname.split("/")[3];
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+
+    if (!library) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    const contents = await scanLibrary(library);
+    sendJson(res, 200, { contents });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/libraries/") && url.pathname.endsWith("/scan") && req.method === "POST") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem escanear bibliotecas." });
+      return;
+    }
+
+    const libraryId = url.pathname.split("/")[3];
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+    if (!library) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+
+    const contents = await scanLibrary(library);
+    const scannedAt = new Date().toISOString();
+    await store.markLibraryScanned(library.id, scannedAt);
+    sendJson(res, 200, { contents, scannedAt });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/contents/") && url.pathname.endsWith("/scan") && req.method === "POST") {
+    const contentId = decodeURIComponent(url.pathname.replace(/^\/api\/contents\//, "").replace(/\/scan$/, ""));
+    const visible = await findVisibleContent(user, contentId);
+    if (!visible) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const contents = await scanLibrary(visible.library);
+    const content = contents.find((item) => item.id === contentId);
+    const scannedAt = new Date().toISOString();
+    await store.markLibraryScanned(visible.library.id, scannedAt);
+    sendJson(res, 200, { content, scannedAt });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/contents/") && req.method === "GET") {
+    const coverRequest = parseContentCoverPath(url.pathname);
+    if (coverRequest) {
+      const data = await store.read();
+      const libraryId = coverRequest.contentId.split(":")[0] ?? "";
+      const library = getRequestLibrary(user, data.libraries, libraryId, req);
+      if (!library) {
+        sendJson(res, 404, { error: "Conteúdo não encontrado." });
+        return;
+      }
+
+      const coverPath = await getContentCoverPath(library, coverRequest.contentId);
+      if (!coverPath) {
+        sendJson(res, 404, { error: "Capa não encontrada." });
+        return;
+      }
+
+      await sendFile(res, coverPath);
+      return;
+    }
+
+    const pageRequest = parseContentPagePath(url.pathname);
+    if (!pageRequest) {
+      sendJson(res, 404, { error: "Página não encontrada." });
+      return;
+    }
+
+    const data = await store.read();
+    const libraryId = pageRequest.contentId.split(":")[0] ?? "";
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+    if (!library) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const pagePath = await getContentPagePath(library, pageRequest.contentId, pageRequest.pageIndex);
+    if (!pagePath) {
+      sendJson(res, 404, { error: "Página não encontrada." });
+      return;
+    }
+
+    await sendFile(res, pagePath);
+    return;
+  }
+
+  if (url.pathname === "/api/continue" && req.method === "GET") {
+    const data = await store.read();
+    const progress = data.progress.filter((item) => item.userId === user.id);
+    sendJson(res, 200, { progress });
+    return;
+  }
+
+  if (url.pathname === "/api/user-lists" && req.method === "GET") {
+    const data = await store.read();
+    const wantToRead = data.wantToRead.filter((item) => item.userId === user.id).map((item) => item.contentId);
+    const readingList = data.readingList.filter((item) => item.userId === user.id).map((item) => item.contentId);
+    const collections = data.collections
+      .filter((item) => item.userId === user.id || item.sharedWithUserIds.includes(user.id))
+      .map((collection) => makePublicCollection(collection, data.users.find((item) => item.id === collection.userId)));
+    sendJson(res, 200, { wantToRead, readingList, collections });
+    return;
+  }
+
+  if (url.pathname === "/api/collections" && req.method === "POST") {
+    const body = await readJson<{ name: string; description?: string }>(req);
+    const name = body.name?.trim();
+    const description = body.description?.trim() ?? "";
+
+    if (!name) {
+      sendJson(res, 400, { error: "Informe o nome da coleção." });
+      return;
+    }
+
+    if (name.length > 80) {
+      sendJson(res, 400, { error: "O nome da coleção deve ter até 80 caracteres." });
+      return;
+    }
+
+    if (description.length > 240) {
+      sendJson(res, 400, { error: "A descrição deve ter até 240 caracteres." });
+      return;
+    }
+
+    const data = await store.read();
+    const collection = await store.createCollection({
+      id: makeCollectionId(name, user.id, data.collections),
+      userId: user.id,
+      name,
+      description,
+      sharedWithUserIds: [],
+      contentIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    sendJson(res, 201, { collection: makePublicCollection(collection, user) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/collections/") && url.pathname.endsWith("/sharing") && req.method === "PUT") {
+    const collectionId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ userIds: string[] }>(req);
+    const data = await store.read();
+    const allowedUserIds = new Set(data.users.map((item) => item.id));
+    const sharedWithUserIds = Array.from(new Set((body.userIds ?? []).filter((userId) => userId !== user.id && allowedUserIds.has(userId))));
+
+    const collection = await store.updateCollectionSharing(user.id, collectionId, sharedWithUserIds);
+    if (!collection) {
+      sendJson(res, 404, { error: "Coleção não encontrada." });
+      return;
+    }
+
+    sendJson(res, 200, { collection: makePublicCollection(collection, user) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/collections/") && !url.pathname.endsWith("/contents") && req.method === "PATCH") {
+    const collectionId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ name: string; description?: string }>(req);
+    const name = body.name?.trim();
+    const description = body.description?.trim() ?? "";
+
+    if (!collectionId) {
+      sendJson(res, 400, { error: "Coleção não informada." });
+      return;
+    }
+
+    if (!name) {
+      sendJson(res, 400, { error: "Informe o nome da coleção." });
+      return;
+    }
+
+    if (name.length > 80) {
+      sendJson(res, 400, { error: "O nome da coleção deve ter até 80 caracteres." });
+      return;
+    }
+
+    if (description.length > 240) {
+      sendJson(res, 400, { error: "A descrição deve ter até 240 caracteres." });
+      return;
+    }
+
+    const collection = await store.updateCollection(user.id, collectionId, { name, description });
+    if (!collection) {
+      sendJson(res, 404, { error: "Coleção não encontrada." });
+      return;
+    }
+
+    sendJson(res, 200, { collection: makePublicCollection(collection, user) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/collections/") && !url.pathname.endsWith("/contents") && !url.pathname.endsWith("/sharing") && req.method === "DELETE") {
+    const collectionId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const deleted = await store.deleteCollection(user.id, collectionId);
+    if (!deleted) {
+      sendJson(res, 404, { error: "Coleção não encontrada." });
+      return;
+    }
+
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/bookmarks" && req.method === "GET") {
+    const data = await store.read();
+    const bookmarks = data.bookmarks.filter((item) => item.userId === user.id);
+    sendJson(res, 200, { bookmarks });
+    return;
+  }
+
+  if (url.pathname === "/api/reviews" && req.method === "GET") {
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId) {
+      sendJson(res, 400, { error: "Conteúdo não informado." });
+      return;
+    }
+
+    const data = await store.read();
+    if (!findVisibleLibraryForContentId(user, data.libraries, contentId)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+    const visibleReviews = data.reviews
+      .filter((item) => item.contentId === contentId)
+      .map((review) => {
+        const author = data.users.find((item) => item.id === review.userId);
+        if (!author) {
+          return null;
+        }
+        return makePublicReview(review, author);
+      })
+      .filter((item): item is PublicContentReview => Boolean(item))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+    sendJson(res, 200, { reviews: visibleReviews });
+    return;
+  }
+
+  if (url.pathname === "/api/progress" && req.method === "PUT") {
+    const body = await readJson<{ contentId: string; currentPage: number }>(req);
+    const visible = await findRequestContent(user, body.contentId, req);
+    if (!visible) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.upsertProgress({
+      userId: user.id,
+      contentId: body.contentId,
+      currentPage: Math.min(Math.max(Number(body.currentPage), 0), Math.max(visible.pageCount - 1, 0)),
+      updatedAt: new Date().toISOString()
+    });
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/progress" && req.method === "DELETE") {
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId) {
+      sendJson(res, 400, { error: "Conteúdo não informado." });
+      return;
+    }
+
+    const data = await store.read();
+    if (!findVisibleLibraryForContentId(user, data.libraries, contentId)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.removeProgress(user.id, contentId);
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/bookmarks" && req.method === "POST") {
+    const body = await readJson<{ contentId: string; page: number }>(req);
+    const result = await store.toggleBookmark({
+      userId: user.id,
+      contentId: body.contentId,
+      page: body.page,
+      createdAt: new Date().toISOString()
+    });
+    sendJson(res, 200, result);
+    return;
+  }
+
+  if (url.pathname === "/api/reviews" && req.method === "POST") {
+    const body = await readJson<{ contentId: string; rating: number; comment: string }>(req);
+    const contentId = body.contentId?.trim();
+    const rating = Number(body.rating);
+    const comment = body.comment?.trim();
+
+    if (!contentId || !Number.isFinite(rating) || rating < 0 || rating > 10 || !comment) {
+      sendJson(res, 400, { error: "Conteúdo, nota e comentário são obrigatórios." });
+      return;
+    }
+
+    const data = await store.read();
+    if (!findVisibleLibraryForContentId(user, data.libraries, contentId)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const review: ContentReview = {
+      userId: user.id,
+      contentId,
+      rating,
+      comment,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    await store.upsertReview(review);
+    sendJson(res, 200, { review: makePublicReview(review, user) });
+    return;
+  }
+
+  if (url.pathname === "/api/series-marks" && req.method === "GET") {
+    const data = await store.read();
+    const seriesMarks = data.seriesMarks.filter((item) => item.userId === user.id).map((item) => item.contentId);
+    sendJson(res, 200, { seriesMarks });
+    return;
+  }
+
+  if (url.pathname === "/api/series-marks" && req.method === "POST") {
+    const body = await readJson<{ contentId: string }>(req);
+    const result = await store.toggleSeriesMark({
+      userId: user.id,
+      contentId: body.contentId,
+      createdAt: new Date().toISOString()
+    });
+    sendJson(res, 200, result);
+    return;
+  }
+
+  if (url.pathname === "/api/want-to-read" && req.method === "POST") {
+    const body = await readJson<{ contentId: string }>(req);
+    if (!(await findVisibleContent(user, body.contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.addToWantToRead({
+      userId: user.id,
+      contentId: body.contentId,
+      createdAt: new Date().toISOString()
+    });
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/want-to-read" && req.method === "DELETE") {
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId || !(await findVisibleContent(user, contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.removeFromWantToRead(user.id, contentId);
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/reading-list" && req.method === "POST") {
+    const body = await readJson<{ contentId: string }>(req);
+    if (!(await findVisibleContent(user, body.contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.addToReadingList({
+      userId: user.id,
+      contentId: body.contentId,
+      createdAt: new Date().toISOString()
+    });
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/reading-list" && req.method === "DELETE") {
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId || !(await findVisibleContent(user, contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.removeFromReadingList(user.id, contentId);
+    sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/collections/") && url.pathname.endsWith("/contents") && req.method === "POST") {
+    const collectionId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ contentId: string }>(req);
+    if (!(await findVisibleContent(user, body.contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const collection = await store.addToCollection(user.id, collectionId, body.contentId);
+    if (!collection) {
+      sendJson(res, 404, { error: "Coleção não encontrada." });
+      return;
+    }
+
+    sendJson(res, 200, { collection: makePublicCollection(collection, user) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/collections/") && url.pathname.endsWith("/contents") && req.method === "DELETE") {
+    const collectionId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId || !(await findVisibleContent(user, contentId))) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const collection = await store.removeFromCollection(user.id, collectionId, contentId);
+    if (!collection) {
+      sendJson(res, 404, { error: "Coleção não encontrada." });
+      return;
+    }
+
+    sendJson(res, 200, { collection: makePublicCollection(collection, user) });
+    return;
+  }
+
+  if (url.pathname === "/api/content-state" && req.method === "DELETE") {
+    const contentId = url.searchParams.get("contentId") ?? "";
+    if (!contentId) {
+      sendJson(res, 400, { error: "Conteúdo não informado." });
+      return;
+    }
+
+    const data = await store.read();
+    if (!findVisibleLibraryForContentId(user, data.libraries, contentId)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    await store.removeContentForUser(user.id, contentId);
+    sendNoContent(res);
+    return;
+  }
+
+  sendJson(res, 404, { error: "Rota não encontrada." });
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.url?.startsWith("/api/")) {
+      await handleApi(req, res);
+      return;
+    }
+
+    await serveStatic(req, res);
+  } catch (error) {
+    console.error(error);
+    sendJson(res, 500, { error: "Erro interno do Pugotiread." });
+  }
+});
+
+server.listen(config.port, () => {
+  console.log(`Pugotiread rodando em http://localhost:${config.port}`);
+});

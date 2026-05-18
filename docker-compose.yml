@@ -1,0 +1,15 @@
+services:
+  pugotiread:
+    build: .
+    container_name: pugotiread
+    ports:
+      - "8099:8099"
+    environment:
+      PORT: "8099"
+      SESSION_SECRET: "troque-este-segredo-no-zimaos"
+      DATA_FILE: "/app/data/store.json"
+      MEDIA_ROOT: "/media"
+    volumes:
+      - ./data:/app/data
+      - ./media:/media:ro
+    restart: unless-stopped

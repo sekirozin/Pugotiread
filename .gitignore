@@ -1,0 +1,8 @@
+node_modules/
+dist/
+media/
+.agents/
+.codex/
+.env
+data/*.local.json
+*.log
