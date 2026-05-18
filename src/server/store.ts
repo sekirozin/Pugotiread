@@ -7,6 +7,63 @@ export const defaultServerSettings: ServerSettings = {
   vaultTimeoutMinutes: 5
 };
 
+function makeInitialStore(): StoreShape {
+  return {
+    settings: defaultServerSettings,
+    users: [
+      {
+        id: "admin",
+        username: "admin",
+        displayName: "Admin",
+        email: "",
+        avatarUrl: "",
+        nickname: "",
+        biography: "",
+        location: "",
+        favoriteContentIds: [],
+        canLogin: true,
+        canDownload: true,
+        canChangePassword: true,
+        lastActiveAt: null,
+        role: "admin",
+        passwordHash: "demo-only-change-me",
+        allowedLibraryIds: []
+      },
+      {
+        id: "user",
+        username: "user",
+        displayName: "Leitor",
+        email: "",
+        avatarUrl: "",
+        nickname: "",
+        biography: "",
+        location: "",
+        favoriteContentIds: [],
+        canLogin: true,
+        canDownload: true,
+        canChangePassword: true,
+        lastActiveAt: null,
+        role: "user",
+        passwordHash: "demo-only-change-me",
+        allowedLibraryIds: []
+      }
+    ],
+    libraries: [],
+    progress: [],
+    bookmarks: [],
+    seriesMarks: [],
+    wantToRead: [],
+    readingList: [],
+    collections: [],
+    reviews: [],
+    invitations: []
+  };
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
 export function normalizeVaultTimeoutMinutes(value: unknown): number {
   const minutes = Number(value);
   if (!Number.isInteger(minutes) || minutes < 1) {
@@ -23,8 +80,18 @@ export class Store {
       return this.data;
     }
 
-    const raw = await fs.readFile(config.dataFile, "utf8");
-    this.data = this.normalize(JSON.parse(raw) as Partial<StoreShape>);
+    try {
+      const raw = await fs.readFile(config.dataFile, "utf8");
+      this.data = this.normalize(JSON.parse(raw) as Partial<StoreShape>);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+
+      this.data = this.normalize(makeInitialStore());
+      await this.write(this.data);
+    }
+
     return this.data;
   }
 

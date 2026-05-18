@@ -10,6 +10,8 @@ type UserCollection = {
   contentIds: string[];
 };
 
+type ReaderMode = "horizontal" | "paged-vertical" | "vertical-scroll";
+
 type AppState = {
   user: PublicUser | null;
   libraries: Library[];
@@ -120,7 +122,7 @@ type AppState = {
     canDownload: boolean;
     canChangePassword: boolean;
   };
-  reader: { content: ContentItem; page: number; mode: "page" | "vertical" } | null;
+  reader: { content: ContentItem; page: number; mode: ReaderMode; controlsVisible: boolean } | null;
 };
 
 const defaultVaultTimeoutMinutes = 5;
@@ -197,6 +199,16 @@ const ICONS = {
 
 function renderIcon(name: keyof typeof ICONS): string {
   return ICONS[name];
+}
+
+function renderReaderModeIcon(): string {
+  if (!state.reader) {
+    return "↕";
+  }
+  if (state.reader.mode === "horizontal") {
+    return "↔";
+  }
+  return "↕";
 }
 
 const SIDEBAR_ICON_PATHS = {
@@ -757,7 +769,7 @@ function renderShell(): void {
   const userName = state.user?.nickname || state.user?.displayName || state.user?.username || "Usuário";
 
   app.innerHTML = `
-    <div class="app-shell${state.activeView === "settings" ? " settings-shell" : ""}${state.sidebarCollapsed ? " sidebar-collapsed" : ""}">
+    <div class="app-shell${state.activeView === "settings" ? " settings-shell" : ""}${state.sidebarCollapsed ? " sidebar-collapsed" : ""}${state.reader ? " reader-active" : ""}">
       <header class="topbar">
         <div class="topbar-brand">
           <button class="icon-button" id="menu-button" type="button" title="Menu">${renderIcon("menu")}</button>
@@ -3298,27 +3310,128 @@ function renderNoSearchResults(): string {
   `;
 }
 
-function renderReader(content: ContentItem, page: number, mode: "page" | "vertical"): string {
+function getReaderModeLabel(mode: ReaderMode): string {
+  const labels: Record<ReaderMode, string> = {
+    horizontal: "Toque lateral",
+    "paged-vertical": "Toque cima/baixo",
+    "vertical-scroll": "Scroll vertical"
+  };
+  return labels[mode];
+}
+
+function getNextReaderMode(mode: ReaderMode): ReaderMode {
+  if (mode === "vertical-scroll") return "horizontal";
+  if (mode === "horizontal") return "paged-vertical";
+  return "vertical-scroll";
+}
+
+function getContentProgressPercent(content: ContentItem, page: number): number {
+  if (content.pageCount <= 1) {
+    return content.pageCount === 0 ? 0 : 100;
+  }
+  return Math.round((page / (content.pageCount - 1)) * 100);
+}
+
+function getChapterForPage(content: ContentItem, page: number): ContentItem["chapters"][number] | null {
+  return content.chapters.find((chapter) => {
+    const endPage = chapter.startPage + chapter.pageCount - 1;
+    return page >= chapter.startPage && page <= endPage;
+  }) ?? null;
+}
+
+function getReaderChapterProgress(content: ContentItem, page: number): {
+  startPage: number;
+  endPage: number;
+  currentPage: number;
+  pageCount: number;
+} {
+  const chapter = getChapterForPage(content, page);
+  const startPage = chapter?.startPage ?? 0;
+  const pageCount = Math.max(chapter?.pageCount ?? content.pageCount, 1);
+  const endPage = Math.min(startPage + pageCount - 1, Math.max(content.pageCount - 1, 0));
+  return {
+    startPage,
+    endPage,
+    currentPage: Math.min(Math.max(page - startPage + 1, 1), pageCount),
+    pageCount
+  };
+}
+
+function hasAdjacentChapter(content: ContentItem, page: number, direction: -1 | 1): boolean {
+  const chapters = [...content.chapters].sort((a, b) => a.startPage - b.startPage);
+  if (chapters.length <= 1) {
+    return false;
+  }
+
+  const currentIndex = chapters.findIndex((chapter) => {
+    const endPage = chapter.startPage + chapter.pageCount - 1;
+    return page >= chapter.startPage && page <= endPage;
+  });
+  const fallbackIndex = chapters.findIndex((chapter) => chapter.startPage > page);
+  const index = currentIndex >= 0 ? currentIndex : fallbackIndex >= 0 ? fallbackIndex : chapters.length - 1;
+  return direction < 0 ? index > 0 : index < chapters.length - 1;
+}
+
+function getAdjacentChapterStartPage(content: ContentItem, page: number, direction: -1 | 1): number {
+  const chapters = [...content.chapters].sort((a, b) => a.startPage - b.startPage);
+  if (chapters.length === 0) {
+    return page;
+  }
+
+  const currentIndex = chapters.findIndex((chapter) => {
+    const endPage = chapter.startPage + chapter.pageCount - 1;
+    return page >= chapter.startPage && page <= endPage;
+  });
+  const fallbackIndex = chapters.findIndex((chapter) => chapter.startPage > page);
+  const index = currentIndex >= 0 ? currentIndex : fallbackIndex >= 0 ? fallbackIndex : chapters.length - 1;
+  const next = chapters[Math.min(Math.max(index + direction, 0), chapters.length - 1)];
+  return next?.startPage ?? page;
+}
+
+function renderReader(content: ContentItem, page: number, mode: ReaderMode): string {
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
   const pageBookmarked = isPageBookmarked(content.id, safePage);
-  const bookmarks = getBookmarksForContent(content.id);
+  const controlsVisible = state.reader?.controlsVisible ?? false;
+  const activeChapter = getChapterForPage(content, safePage);
+  const chapterProgress = getReaderChapterProgress(content, safePage);
+  const modeLabel = getReaderModeLabel(mode);
+  const hasPreviousChapter = hasAdjacentChapter(content, safePage, -1);
+  const hasNextChapter = hasAdjacentChapter(content, safePage, 1);
+  const hasPreviousPage = safePage > 0;
+  const hasNextPage = safePage < content.pageCount - 1;
   return `
-    <section class="reader">
-      <div class="section-heading">
-        <div>
-          <h2>${escapeHtml(content.title)}</h2>
-          <p class="muted">Página ${safePage + 1} de ${Math.max(content.pageCount, 1)} · modo ${mode === "page" ? "página" : "vertical"}</p>
-        </div>
-        <button class="button secondary" id="close-reader">Voltar</button>
-      </div>
-      <div class="reader-stage ${mode === "vertical" ? "vertical" : ""}" id="reader-stage">
+    <section class="reader ${controlsVisible ? "controls-visible" : ""}">
+      <div class="reader-stage ${mode === "vertical-scroll" ? "vertical-scroll" : ""}" id="reader-stage">
         ${renderReaderPages(content, safePage, mode)}
       </div>
-      <div class="reader-actions">
-        <button class="button secondary" id="toggle-mode">${mode === "page" ? "Modo vertical" : "Modo página"}</button>
-        <button class="button secondary bookmark-action${pageBookmarked ? " active" : ""}" id="bookmark-page">${pageBookmarked ? "Remover marcador" : "Marcar página"}</button>
+      <div class="reader-overlay top" aria-hidden="${controlsVisible ? "false" : "true"}">
+        <div>
+          <button class="reader-back" id="close-reader" type="button" aria-label="Voltar">‹</button>
+        </div>
+        <div class="reader-title">
+          <h2>${escapeHtml(content.title)}</h2>
+          <p>${escapeHtml(activeChapter?.name ?? `Página ${safePage + 1}`)} · Progresso: ${getContentProgressPercent(content, safePage)}%</p>
+        </div>
+        <div class="reader-top-actions">
+          <button class="reader-icon-button" id="bookmark-page" type="button" title="${pageBookmarked ? "Remover marcador" : "Marcar página"}" aria-label="${pageBookmarked ? "Remover marcador" : "Marcar página"}">${pageBookmarked ? "▮" : "▯"}</button>
+        </div>
       </div>
-      ${renderReaderBookmarks(bookmarks)}
+      <div class="reader-overlay bottom" aria-hidden="${controlsVisible ? "false" : "true"}">
+        <div class="reader-page-controls">
+          <button class="reader-jump-button" data-chapter-step="-1" type="button" aria-label="Capítulo anterior"${hasPreviousChapter ? "" : " disabled"}>⏮</button>
+          <button class="reader-jump-button" data-page-step="-1" type="button" aria-label="Página anterior"${hasPreviousPage ? "" : " disabled"}>◀</button>
+          <label class="reader-progress">
+            <span>${chapterProgress.currentPage}</span>
+            <input data-reader-page-slider type="range" min="${chapterProgress.startPage}" max="${chapterProgress.endPage}" value="${safePage}" aria-label="Progresso do capítulo" />
+            <span>${chapterProgress.pageCount}</span>
+          </label>
+          <button class="reader-jump-button" data-page-step="1" type="button" aria-label="Próxima página"${hasNextPage ? "" : " disabled"}>▶</button>
+          <button class="reader-jump-button" data-chapter-step="1" type="button" aria-label="Próximo capítulo"${hasNextChapter ? "" : " disabled"}>⏭</button>
+        </div>
+        <div class="reader-bottom-actions">
+          <button class="reader-mode-button" id="toggle-mode" type="button" title="${escapeHtml(modeLabel)}" aria-label="${escapeHtml(modeLabel)}">${renderReaderModeIcon()}</button>
+        </div>
+      </div>
     </section>
   `;
 }
@@ -3345,21 +3458,25 @@ function renderReaderBookmarks(bookmarks: Bookmark[]): string {
   `;
 }
 
-function renderReaderPages(content: ContentItem, page: number, mode: "page" | "vertical"): string {
+function renderReaderPages(content: ContentItem, page: number, mode: ReaderMode): string {
   if (content.pageCount === 0) {
     return `<div class="reader-page">Nenhuma página de imagem foi encontrada para este conteúdo.</div>`;
   }
 
-  if (mode === "vertical") {
+  if (mode === "vertical-scroll") {
     return Array.from({ length: content.pageCount }, (_, index) => {
       return renderPageMedia(content, index, true);
     }).join("");
   }
 
+  const axisClass = mode === "paged-vertical" ? "vertical-axis" : "horizontal-axis";
   return `
-    <button class="reader-hit left" data-page-step="-1" aria-label="Página anterior"></button>
-    ${renderPageMedia(content, page, false)}
-    <button class="reader-hit right" data-page-step="1" aria-label="Próxima página"></button>
+    <button class="reader-background-toggle" data-reader-toggle-controls type="button" aria-label="Mostrar controles"></button>
+    <div class="reader-media-shell ${axisClass}">
+      <button class="reader-hit previous" data-page-step="-1" aria-label="Página anterior"></button>
+      ${renderPageMedia(content, page, false)}
+      <button class="reader-hit next" data-page-step="1" aria-label="Próxima página"></button>
+    </div>
   `;
 }
 
@@ -3372,13 +3489,14 @@ function renderPageMedia(content: ContentItem, page: number, vertical: boolean):
     return `
       <iframe
         class="reader-pdf ${vertical ? "vertical-page" : ""}"
+        data-reader-page-index="${page}"
         src="${escapeHtml(src)}#toolbar=0"
         title="${escapeHtml(content.title)} PDF ${page + 1}"
       ></iframe>
     `;
   }
 
-  return `<img class="${className}" src="${escapeHtml(src)}" alt="${escapeHtml(content.title)} página ${page + 1}" loading="${vertical && page >= 2 ? "lazy" : "eager"}" />`;
+  return `<img class="${className}" data-reader-page-index="${page}" src="${escapeHtml(src)}" alt="${escapeHtml(content.title)} página ${page + 1}" loading="${vertical && page >= 2 ? "lazy" : "eager"}" />`;
 }
 
 function getPageUrl(content: ContentItem, page: number): string {
@@ -4078,39 +4196,123 @@ function bindShellEvents(): void {
       return;
     }
 
-    state.reader.mode = state.reader.mode === "page" ? "vertical" : "page";
+    state.reader.mode = getNextReaderMode(state.reader.mode);
+    state.reader.controlsVisible = true;
     renderShell();
+    if (state.reader.mode === "vertical-scroll") {
+      requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
+    }
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-reader-toggle-controls]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (!state.reader) {
+        return;
+      }
+      state.reader.controlsVisible = !state.reader.controlsVisible;
+      renderShell();
+    });
+  });
+
+  document.querySelector("#reader-stage")?.addEventListener("click", (event) => {
+    if (!state.reader || state.reader.mode !== "vertical-scroll") {
+      return;
+    }
+    if ((event.target as HTMLElement).closest(".reader-image, .reader-pdf, .reader-overlay, button, input")) {
+      return;
+    }
+    syncReaderPageFromScroll();
+    state.reader.controlsVisible = !state.reader.controlsVisible;
+    renderShell();
+    requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
+  });
+
+  document.querySelector("#reader-stage")?.addEventListener("scroll", () => {
+    if (!state.reader || state.reader.mode !== "vertical-scroll") {
+      return;
+    }
+    syncReaderPageFromScroll();
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-page-step]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
       if (!state.reader) {
         return;
       }
 
       const step = Number(button.dataset.pageStep);
-      const maxPage = Math.max(state.reader.content.pageCount - 1, 0);
-      state.reader.page = Math.min(Math.max(state.reader.page + step, 0), maxPage);
-      await api<void>("/api/progress", {
-        method: "PUT",
-        body: JSON.stringify({ contentId: state.reader.content.id, currentPage: state.reader.page })
-      });
-      renderShell();
+      await setReaderPage(state.reader.page + step);
     });
   });
 
-  document.querySelector("#bookmark-page")?.addEventListener("click", async () => {
-    if (!state.reader) {
+  document.querySelectorAll<HTMLButtonElement>("[data-chapter-step]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!state.reader) {
+        return;
+      }
+
+      const direction = Number(button.dataset.chapterStep) < 0 ? -1 : 1;
+      await setReaderPage(getAdjacentChapterStartPage(state.reader.content, state.reader.page, direction));
+    });
+  });
+
+  document.querySelector<HTMLInputElement>("[data-reader-page-slider]")?.addEventListener("change", (event) => {
+    event.stopPropagation();
+    void setReaderPage(Number((event.currentTarget as HTMLInputElement).value));
+  });
+
+  document.querySelector("#bookmark-page")?.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!state.reader || !state.user) {
       return;
     }
 
-    await api<{ marked: boolean }>("/api/bookmarks", {
-      method: "POST",
-      body: JSON.stringify({ contentId: state.reader.content.id, page: state.reader.page })
-    });
-    const { bookmarks } = await api<{ bookmarks: Bookmark[] }>("/api/bookmarks");
-    state.bookmarks = bookmarks;
+    if (state.reader.mode === "vertical-scroll") {
+      syncReaderPageFromScroll();
+    }
+
+    const contentId = state.reader.content.id;
+    const page = state.reader.page;
+    const previousBookmarks = state.bookmarks;
+    const existingBookmark = previousBookmarks.find((bookmark) => bookmark.contentId === contentId && bookmark.page === page);
+
+    state.reader.controlsVisible = true;
+    state.bookmarks = existingBookmark
+      ? previousBookmarks.filter((bookmark) => !(bookmark.contentId === contentId && bookmark.page === page))
+      : [
+          ...previousBookmarks,
+          {
+            userId: state.user.id,
+            contentId,
+            page,
+            createdAt: new Date().toISOString()
+          }
+        ];
     renderShell();
+    if (state.reader.mode === "vertical-scroll") {
+      requestAnimationFrame(() => scrollReaderToPage(page));
+    }
+
+    try {
+      await api<{ marked: boolean }>("/api/bookmarks", {
+        method: "POST",
+        body: JSON.stringify({ contentId, page })
+      });
+      const { bookmarks } = await api<{ bookmarks: Bookmark[] }>("/api/bookmarks");
+      state.bookmarks = bookmarks;
+      renderShell();
+      if (state.reader?.mode === "vertical-scroll") {
+        requestAnimationFrame(() => scrollReaderToPage(page));
+      }
+    } catch (error) {
+      console.error(error);
+      state.bookmarks = previousBookmarks;
+      renderShell();
+    }
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-reader-bookmark-page]").forEach((button) => {
@@ -4120,14 +4322,8 @@ function bindShellEvents(): void {
       }
 
       const page = Number(button.dataset.readerBookmarkPage ?? "0");
-      state.reader.page = Math.min(Math.max(page, 0), Math.max(state.reader.content.pageCount - 1, 0));
-      state.reader.mode = "page";
-      await api<void>("/api/progress", {
-        method: "PUT",
-        body: JSON.stringify({ contentId: state.reader.content.id, currentPage: state.reader.page })
-      });
-      await refreshProgress();
-      renderShell();
+      state.reader.mode = "horizontal";
+      await setReaderPage(page);
     });
   });
 
@@ -4221,10 +4417,78 @@ function isPageBookmarked(contentId: string, page: number): boolean {
   return state.bookmarks.some((bookmark) => bookmark.contentId === contentId && bookmark.page === page);
 }
 
+async function setReaderPage(page: number): Promise<void> {
+  if (!state.reader) {
+    return;
+  }
+
+  const mode = state.reader.mode;
+  const contentId = state.reader.content.id;
+  const maxPage = Math.max(state.reader.content.pageCount - 1, 0);
+  state.reader.page = Math.min(Math.max(page, 0), maxPage);
+  const currentPage = state.reader.page;
+  renderShell();
+  if (mode === "vertical-scroll") {
+    requestAnimationFrame(() => scrollReaderToPage(currentPage));
+  }
+
+  try {
+    await api<void>("/api/progress", {
+      method: "PUT",
+      body: JSON.stringify({ contentId, currentPage })
+    });
+    await refreshProgress();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function openReader(content: ContentItem, page: number): void {
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
-  state.reader = { content, page: safePage, mode: "page" };
+  state.reader = { content, page: safePage, mode: "vertical-scroll", controlsVisible: false };
   state.activeSeriesId = content.id;
+}
+
+function syncReaderPageFromScroll(): void {
+  if (!state.reader || state.reader.mode !== "vertical-scroll") {
+    return;
+  }
+
+  const visiblePage = getVisibleReaderPage();
+  if (visiblePage === null) {
+    return;
+  }
+  state.reader.page = visiblePage;
+}
+
+function getVisibleReaderPage(): number | null {
+  const stage = document.querySelector<HTMLElement>("#reader-stage");
+  const pages = Array.from(document.querySelectorAll<HTMLElement>("[data-reader-page-index]"));
+  if (!stage || pages.length === 0) {
+    return null;
+  }
+
+  const stageRect = stage.getBoundingClientRect();
+  const focusY = stageRect.top + stageRect.height * 0.45;
+  let closestPage: number | null = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  for (const page of pages) {
+    const rect = page.getBoundingClientRect();
+    const pageCenter = rect.top + rect.height / 2;
+    const distance = Math.abs(pageCenter - focusY);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestPage = Number(page.dataset.readerPageIndex ?? "0");
+    }
+  }
+
+  return closestPage;
+}
+
+function scrollReaderToPage(page: number): void {
+  const target = document.querySelector<HTMLElement>(`[data-reader-page-index="${page}"]`);
+  target?.scrollIntoView({ block: "start", inline: "nearest" });
 }
 
 function openReaderAtProgress(content: ContentItem): void {

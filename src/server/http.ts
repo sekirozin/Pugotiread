@@ -18,6 +18,14 @@ const contentTypes = new Map([
   [".pdf", "application/pdf"]
 ]);
 
+function getStaticCacheControl(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html" || extension === ".js" || extension === ".css") {
+    return "no-cache, no-store, must-revalidate";
+  }
+  return "private, max-age=3600";
+}
+
 export async function readJson<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -76,7 +84,10 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse): Pr
 
   try {
     const file = await fs.readFile(filePath);
-    res.writeHead(200, { "Content-Type": contentTypes.get(path.extname(filePath)) ?? "application/octet-stream" });
+    res.writeHead(200, {
+      "Content-Type": contentTypes.get(path.extname(filePath)) ?? "application/octet-stream",
+      "Cache-Control": getStaticCacheControl(filePath)
+    });
     res.end(file);
   } catch {
     if (path.extname(requestedPath)) {
@@ -85,7 +96,10 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse): Pr
     }
 
     const fallback = await fs.readFile(path.join(config.publicDir, "index.html"));
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache, no-store, must-revalidate"
+    });
     res.end(fallback);
   }
 }
