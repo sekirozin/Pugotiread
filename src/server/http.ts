@@ -45,11 +45,22 @@ export function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
+const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
+
+function getFileCacheControl(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (imageExtensions.has(ext)) {
+    return "public, max-age=86400, immutable";
+  }
+  return "private, max-age=3600";
+}
+
 export async function sendFile(res: ServerResponse, filePath: string): Promise<void> {
   const file = await fs.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
   res.writeHead(200, {
-    "Content-Type": contentTypes.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream",
-    "Cache-Control": "private, max-age=3600"
+    "Content-Type": contentTypes.get(ext) ?? "application/octet-stream",
+    "Cache-Control": getFileCacheControl(filePath)
   });
   res.end(file);
 }
@@ -74,8 +85,14 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
 
-  const baseDir = requestedPath === "/app.js" ? config.clientDir : config.publicDir;
-  const filePath = path.resolve(baseDir, `.${requestedPath}`);
+  const servesWebModule = requestedPath.startsWith("/UI/Web/");
+  const baseDir = requestedPath === "/app.js"
+    ? config.clientDir
+    : servesWebModule
+      ? path.resolve(config.clientDir, "../UI/Web")
+      : config.publicDir;
+  const staticPath = servesWebModule ? requestedPath.slice("/UI/Web".length) : requestedPath;
+  const filePath = path.resolve(baseDir, `.${staticPath}`);
 
   if (!filePath.startsWith(path.resolve(baseDir))) {
     sendJson(res, 403, { error: "Acesso negado." });

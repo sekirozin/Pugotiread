@@ -1,17 +1,73 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+function parseEnvFile(filePath: string): Record<string, string> {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const equalsIndex = line.indexOf("=");
+    if (equalsIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, equalsIndex).trim();
+    let value = line.slice(equalsIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    result[key] = value;
+  }
+
+  return result;
+}
+
+const envFileValues = {
+  ...parseEnvFile(path.join(projectRoot, ".env")),
+  ...parseEnvFile(path.join(projectRoot, ".env.local"))
+};
+
+for (const [key, value] of Object.entries(envFileValues)) {
+  if (process.env[key] === undefined) {
+    process.env[key] = value;
+  }
+}
+
 // Centraliza caminhos e portas para facilitar Docker, ZimaOS e execução local.
 export const config = {
   port: Number(process.env.PORT ?? 8099),
   sessionSecret: process.env.SESSION_SECRET ?? "pugotiread-dev-secret",
+  publicUrl: process.env.PUBLIC_URL ?? `http://localhost:${Number(process.env.PORT ?? 8099)}`,
   dataFile: process.env.DATA_FILE ?? path.join(projectRoot, "data/store.json"),
+  dbFile: process.env.DB_FILE ?? path.join(projectRoot, "data/store.db"),
   publicDir: process.env.PUBLIC_DIR ?? path.join(projectRoot, "public"),
   iconsDir: process.env.ICONS_DIR ?? path.join(projectRoot, "icons"),
   clientDir: process.env.CLIENT_DIR ?? path.join(projectRoot, "dist/client"),
   mediaRoot: process.env.MEDIA_ROOT ?? path.join(projectRoot, "media"),
   vaultMediaRoot: process.env.VAULT_MEDIA_ROOT ?? path.join(projectRoot, "media/cofre"),
-  googleClientId: process.env.GOOGLE_CLIENT_ID ?? ""
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
+  cacheDir: process.env.CACHE_DIR ?? path.join(projectRoot, "data/cache"),
+  smtpHost: process.env.SMTP_HOST ?? "",
+  smtpPort: Number(process.env.SMTP_PORT ?? 587),
+  smtpSecure: process.env.SMTP_SECURE === "true",
+  smtpUser: process.env.SMTP_USER ?? "",
+  smtpPass: process.env.SMTP_PASS ?? "",
+  smtpFrom: process.env.SMTP_FROM ?? "Pugotiread <no-reply@localhost>"
 };

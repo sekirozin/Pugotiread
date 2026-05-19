@@ -20,6 +20,7 @@ export function toPublicUser(user: User): PublicUser {
     canLogin: user.canLogin,
     canDownload: user.canDownload,
     canChangePassword: user.canChangePassword,
+    passwordChangeRequiresEmailConfirmation: user.passwordChangeRequiresEmailConfirmation,
     lastActiveAt: user.lastActiveAt,
     needsNickname: Boolean(user.googleSub && !user.nickname),
     allowedLibraryIds: user.allowedLibraryIds,
@@ -120,10 +121,6 @@ export function hashPassword(password: string): string {
 }
 
 export function verifyPassword(user: User, password: string): boolean {
-  if (user.passwordHash === "demo-only-change-me") {
-    return user.username === password;
-  }
-
   const parts = user.passwordHash.split("$");
   if (parts[0] !== "pbkdf2" || parts.length !== 4) {
     return false;
@@ -138,6 +135,15 @@ export function verifyPassword(user: User, password: string): boolean {
 
   const actual = crypto.pbkdf2Sync(password, salt, iterations, Buffer.from(expected, "hex").length, "sha256").toString("hex");
   return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
+}
+
+export function isPasswordHashReady(passwordHash: string): boolean {
+  const parts = passwordHash.split("$");
+  if (parts[0] !== "pbkdf2" || parts.length !== 4) {
+    return false;
+  }
+
+  return Number.isFinite(Number(parts[1])) && Boolean(parts[2]) && Boolean(parts[3]);
 }
 
 export function createSessionToken(userId: string): string {
@@ -189,7 +195,16 @@ export async function getCurrentUser(req: IncomingMessage): Promise<User | null>
   }
 
   const data = await store.read();
-  return data.users.find((user) => user.id === userId) ?? null;
+  const found = data.users.find((user) => user.id === userId) ?? null;
+  if (!found) {
+    return null;
+  }
+
+  if (found.role === "admin" && !isPasswordHashReady(found.passwordHash)) {
+    return null;
+  }
+
+  return found;
 }
 
 export function setSessionCookie(res: ServerResponse, token: string): void {

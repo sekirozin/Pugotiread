@@ -18,6 +18,7 @@ export interface User {
   canLogin: boolean;
   canDownload: boolean;
   canChangePassword: boolean;
+  passwordChangeRequiresEmailConfirmation: boolean;
   lastActiveAt: string | null;
   role: UserRole;
   passwordHash: string;
@@ -37,6 +38,7 @@ export interface PublicUser {
   canLogin: boolean;
   canDownload: boolean;
   canChangePassword: boolean;
+  passwordChangeRequiresEmailConfirmation: boolean;
   lastActiveAt: string | null;
   needsNickname?: boolean;
   allowedLibraryIds: string[];
@@ -121,11 +123,22 @@ export interface Invitation {
   email: string;
   displayName: string;
   username: string;
+  role: UserRole;
   allowedLibraryIds: string[];
   canLogin: boolean;
   canDownload: boolean;
   canChangePassword: boolean;
   createdAt: string;
+  usedAt: string | null;
+}
+
+export interface PasswordResetToken {
+  token: string;
+  userId: string;
+  email: string;
+  purpose: "password-reset";
+  createdAt: string;
+  expiresAt: string;
   usedAt: string | null;
 }
 
@@ -156,4 +169,5 @@ export interface StoreShape {
   collections: ContentCollection[];
   reviews: ContentReview[];
   invitations: Invitation[];
+  passwordResetTokens: PasswordResetToken[];
 }

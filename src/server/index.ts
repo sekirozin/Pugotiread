@@ -2,12 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, setSessionCookie, toPublicUser, verifyGoogleIdToken, verifyPassword } from "./auth.js";
+import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, isPasswordHashReady, setSessionCookie, toPublicUser, verifyGoogleIdToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { readJson, sendFile, sendJson, sendNoContent, serveStatic } from "./http.js";
-import { getContentCoverPath, getContentPagePath, scanLibrary } from "./media.js";
+import { sendPasswordResetEmail } from "./mailer.js";
+import { getContentCoverPath, getContentCoverThumbnail, getContentPagePath, scanLibrary } from "./media.js";
 import { normalizeVaultTimeoutMinutes, store } from "./store.js";
-import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PublicContentReview, ServerSettings, User } from "../shared/types.js";
+import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
 
 function isPersonalLibrary(library: Library): boolean {
   return Boolean(library.isPersonal);
@@ -149,6 +150,38 @@ function makeInviteToken(): string {
   return crypto.randomBytes(18).toString("hex");
 }
 
+function makePasswordResetTokenValue(): string {
+  return crypto.randomBytes(18).toString("hex");
+}
+
+function hashPasswordResetToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function makePasswordResetLink(token: string): string {
+  return `${config.publicUrl.replace(/\/$/, "")}/reset-password/${encodeURIComponent(token)}`;
+}
+
+async function issuePasswordResetToken(user: User): Promise<PasswordResetToken> {
+  const token = makePasswordResetTokenValue();
+  const tokenHash = hashPasswordResetToken(token);
+  const now = Date.now();
+  const createdAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + 30 * 60 * 1000).toISOString();
+  const resetToken: PasswordResetToken = {
+    token: tokenHash,
+    userId: user.id,
+    email: user.email,
+    purpose: "password-reset",
+    createdAt,
+    expiresAt,
+    usedAt: null
+  };
+  await store.createPasswordResetToken(resetToken);
+  await sendPasswordResetEmail(user.email, makePasswordResetLink(token));
+  return resetToken;
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -156,6 +189,14 @@ function normalizeEmail(email: string): string {
 function sanitizeLibraryIds(libraryIds: string[], libraries: Library[]): string[] {
   const allowed = new Set(libraries.map((library) => library.id));
   return Array.from(new Set(libraryIds.filter((id) => allowed.has(id))));
+}
+
+function sanitizeUserRole(role: unknown): User["role"] {
+  return role === "admin" ? "admin" : "user";
+}
+
+function hasConfiguredAdmin(users: User[]): boolean {
+  return users.some((item) => item.role === "admin" && isPasswordHashReady(item.passwordHash));
 }
 
 function buildUserFromInput(body: {
@@ -168,6 +209,7 @@ function buildUserFromInput(body: {
   canLogin?: boolean;
   canDownload?: boolean;
   canChangePassword?: boolean;
+  passwordChangeRequiresEmailConfirmation?: boolean;
   passwordHash?: string;
 }, existingUsers: User[], libraries: Library[]): User {
   const username = body.username?.trim() ?? "";
@@ -196,6 +238,7 @@ function buildUserFromInput(body: {
     canLogin: body.canLogin ?? true,
     canDownload: body.canDownload ?? true,
     canChangePassword: body.canChangePassword ?? true,
+    passwordChangeRequiresEmailConfirmation: body.passwordChangeRequiresEmailConfirmation ?? true,
     lastActiveAt: null,
     role: body.role ?? "user",
     passwordHash: body.passwordHash ?? hashPassword(body.password ?? ""),
@@ -227,6 +270,12 @@ function makePublicReview(review: ContentReview, user: User): PublicContentRevie
     createdAt: review.createdAt,
     updatedAt: review.updatedAt
   };
+}
+
+function getVisibleReviewCountForUser(viewer: User, data: { libraries: Library[]; reviews: ContentReview[] }, userId: string): number {
+  return data.reviews.filter(
+    (review) => review.userId === userId && Boolean(findVisibleLibraryForContentId(viewer, data.libraries, review.contentId))
+  ).length;
 }
 
 function makePublicCollection(collection: ContentCollection, owner?: User): Pick<ContentCollection, "id" | "userId" | "name" | "description" | "sharedWithUserIds" | "contentIds"> & { ownerDisplayName: string } {
@@ -272,6 +321,74 @@ async function readMediaDirectory(requestedPath: string): Promise<{ path: string
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const user = await getCurrentUser(req);
+
+  if (url.pathname === "/api/setup/status" && req.method === "GET") {
+    const data = await store.read();
+    sendJson(res, 200, { setupRequired: !hasConfiguredAdmin(data.users) });
+    return;
+  }
+
+  if (url.pathname === "/api/setup/admin" && req.method === "POST") {
+    const body = await readJson<{
+      username: string;
+      displayName: string;
+      email: string;
+      password: string;
+    }>(req);
+    const username = body.username?.trim() ?? "";
+    const displayName = body.displayName?.trim() ?? "";
+    const email = normalizeEmail(body.email ?? "");
+    const password = body.password?.trim() ?? "";
+
+    if (!username || !displayName || !email || !password) {
+      sendJson(res, 400, { error: "Preencha usuário, nome, e-mail e senha." });
+      return;
+    }
+
+    if (password.length < 12) {
+      sendJson(res, 400, { error: "A senha inicial deve ter pelo menos 12 caracteres." });
+      return;
+    }
+
+    const data = await store.read();
+    if (hasConfiguredAdmin(data.users)) {
+      sendJson(res, 409, { error: "Já existe um administrador configurado." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const existingAdminIndex = data.users.findIndex((item) => item.role === "admin");
+    const userRecord: User = {
+      id: existingAdminIndex >= 0 ? data.users[existingAdminIndex].id : makeUserId(username, data.users),
+      username,
+      displayName,
+      email,
+      avatarUrl: "",
+      nickname: "",
+      biography: "",
+      location: "",
+      favoriteContentIds: [],
+      canLogin: true,
+      canDownload: true,
+      canChangePassword: true,
+      passwordChangeRequiresEmailConfirmation: false,
+      lastActiveAt: now,
+      role: "admin",
+      passwordHash: hashPassword(password),
+      allowedLibraryIds: []
+    };
+
+    if (existingAdminIndex >= 0) {
+      data.users[existingAdminIndex] = userRecord;
+    } else {
+      data.users.push(userRecord);
+    }
+
+    await store.write(data);
+    setSessionCookie(res, createSessionToken(userRecord.id));
+    sendJson(res, 201, { user: toPublicUser(userRecord) });
+    return;
+  }
 
   if (url.pathname === "/api/login" && req.method === "POST") {
     const body = await readJson<{ username: string; password: string }>(req);
@@ -348,6 +465,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
           canLogin: invitation.canLogin,
           canDownload: invitation.canDownload,
           canChangePassword: false,
+          passwordChangeRequiresEmailConfirmation: true,
           lastActiveAt: now,
           role: "user",
           passwordHash: "google-only",
@@ -446,8 +564,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       canLogin: invitation.canLogin,
       canDownload: invitation.canDownload,
       canChangePassword: true,
+      passwordChangeRequiresEmailConfirmation: true,
       lastActiveAt: now,
-      role: "user" as const,
+      role: sanitizeUserRole(invitation.role),
       passwordHash: hashPassword(password),
       allowedLibraryIds: invitation.allowedLibraryIds
     };
@@ -457,6 +576,65 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
     setSessionCookie(res, createSessionToken(user.id));
     sendJson(res, 201, { user: toPublicUser(user) });
+    return;
+  }
+
+  if (url.pathname === "/api/password-reset/request" && req.method === "POST") {
+    const body = await readJson<{ email: string }>(req);
+    const email = normalizeEmail(body.email ?? "");
+    if (!email) {
+      sendJson(res, 400, { error: "Informe o e-mail cadastrado." });
+      return;
+    }
+
+    const data = await store.read();
+    const target = data.users.find((item) => normalizeEmail(item.email) === email);
+    if (target && target.email) {
+      await issuePasswordResetToken(target);
+    }
+
+    sendJson(res, 200, { message: "Se o e-mail estiver cadastrado, você receberá um link para trocar a senha." });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/password-reset/") && req.method === "POST") {
+    const token = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = await readJson<{ newPassword: string }>(req);
+    const newPassword = body.newPassword?.trim() ?? "";
+    if (!token || !newPassword) {
+      sendJson(res, 400, { error: "Token ou nova senha inválidos." });
+      return;
+    }
+
+    if (newPassword.length < 12) {
+      sendJson(res, 400, { error: "A senha deve ter pelo menos 12 caracteres." });
+      return;
+    }
+
+    const resetToken = await store.consumePasswordResetToken(token);
+    if (!resetToken || resetToken.purpose !== "password-reset" || Number(new Date(resetToken.expiresAt)) < Date.now()) {
+      sendJson(res, 404, { error: "Link de confirmação inválido ou expirado." });
+      return;
+    }
+
+    const data = await store.read();
+    const target = data.users.find((item) => item.id === resetToken.userId && normalizeEmail(item.email) === normalizeEmail(resetToken.email));
+    if (!target) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    const updated = await store.updateUser(target.id, {
+      passwordHash: hashPassword(newPassword),
+      passwordChangeRequiresEmailConfirmation: target.passwordChangeRequiresEmailConfirmation
+    });
+
+    if (!updated) {
+      sendJson(res, 404, { error: "Usuário não encontrado." });
+      return;
+    }
+
+    sendNoContent(res);
     return;
   }
 
@@ -477,6 +655,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    if (user.passwordChangeRequiresEmailConfirmation) {
+      sendJson(res, 403, { error: "Esta conta precisa confirmar a troca por e-mail." });
+      return;
+    }
+
     if (!verifyPassword(user, body.currentPassword ?? "") || !body.newPassword?.trim()) {
       sendJson(res, 400, { error: "Senha atual inválida." });
       return;
@@ -484,6 +667,27 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
     await store.updateUser(user.id, { passwordHash: hashPassword(body.newPassword.trim()) });
     sendNoContent(res);
+    return;
+  }
+
+  if (url.pathname === "/api/me/password/request" && req.method === "POST") {
+    if (!user.canChangePassword) {
+      sendJson(res, 403, { error: "Esta conta não pode alterar a própria senha." });
+      return;
+    }
+
+    if (!user.passwordChangeRequiresEmailConfirmation) {
+      sendJson(res, 400, { error: "Esta conta pode trocar a senha diretamente." });
+      return;
+    }
+
+    if (!user.email) {
+      sendJson(res, 400, { error: "Esta conta não possui e-mail cadastrado." });
+      return;
+    }
+
+    await issuePasswordResetToken(user);
+    sendJson(res, 200, { message: "Enviamos um link para confirmar a troca da senha." });
     return;
   }
 
@@ -593,7 +797,21 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
   if (url.pathname === "/api/users" && req.method === "GET") {
     const data = await store.read();
-    sendJson(res, 200, { users: data.users.map(toPublicUser) });
+    sendJson(res, 200, {
+      users: data.users.map((item) => ({
+        id: item.id,
+        username: item.username,
+        displayName: item.displayName,
+        avatarUrl: item.avatarUrl,
+        nickname: item.nickname,
+        biography: item.biography,
+        location: item.location,
+        favoriteContentIds: item.favoriteContentIds,
+        lastActiveAt: item.lastActiveAt,
+        role: item.role,
+        reviewCount: getVisibleReviewCountForUser(user, data, item.id)
+      }))
+    });
     return;
   }
 
@@ -649,6 +867,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       displayName: string;
       username: string;
       password: string;
+      role: User["role"];
       allowedLibraryIds: string[];
       canLogin: boolean;
       canDownload: boolean;
@@ -667,10 +886,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         displayName: body.displayName,
         username: body.username,
         password: body.password,
+        role: sanitizeUserRole(body.role),
         allowedLibraryIds: body.allowedLibraryIds,
         canLogin: body.canLogin,
         canDownload: body.canDownload,
-        canChangePassword: body.canChangePassword
+        canChangePassword: body.canChangePassword,
+        passwordChangeRequiresEmailConfirmation: false
       }, data.users, data.libraries));
       sendJson(res, 201, { user: toPublicUser(created) });
     } catch (error) {
@@ -690,6 +911,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       displayName: string;
       username: string;
       linkOnly?: boolean;
+      role: User["role"];
       allowedLibraryIds: string[];
       canLogin: boolean;
       canDownload: boolean;
@@ -705,6 +927,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         email: linkOnly ? "" : body.email?.trim() ?? "",
         displayName: linkOnly ? "" : body.displayName?.trim() ?? body.username?.trim() ?? "",
         username: linkOnly ? "" : body.username?.trim() ?? "",
+        role: sanitizeUserRole(body.role),
         allowedLibraryIds: sanitizeLibraryIds(body.allowedLibraryIds ?? [], data.libraries),
         canLogin: body.canLogin ?? true,
         canDownload: body.canDownload ?? true,
@@ -732,12 +955,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const userId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const userId = decodeURIComponent(url.pathname.split("/")[4] ?? "");
     const body = await readJson<{
       email?: string;
       displayName?: string;
       username?: string;
       password?: string;
+      role?: User["role"];
       allowedLibraryIds?: string[];
       canLogin?: boolean;
       canDownload?: boolean;
@@ -754,6 +978,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     if (body.email !== undefined) updates.email = body.email.trim();
     if (body.displayName !== undefined) updates.displayName = body.displayName.trim();
     if (body.username !== undefined) updates.username = body.username.trim();
+    if (body.role !== undefined) updates.role = sanitizeUserRole(body.role);
     if (body.allowedLibraryIds !== undefined) updates.allowedLibraryIds = sanitizeLibraryIds(body.allowedLibraryIds, data.libraries);
     if (body.canLogin !== undefined) updates.canLogin = Boolean(body.canLogin);
     if (body.canDownload !== undefined) updates.canDownload = Boolean(body.canDownload);
@@ -776,7 +1001,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const userId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const userId = decodeURIComponent(url.pathname.split("/")[4] ?? "");
     if (userId === user.id) {
       sendJson(res, 400, { error: "Você não pode remover sua própria conta." });
       return;
@@ -1010,6 +1235,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       const library = getRequestLibrary(user, data.libraries, libraryId, req);
       if (!library) {
         sendJson(res, 404, { error: "Conteúdo não encontrado." });
+        return;
+      }
+
+      const thumbPath = await getContentCoverThumbnail(library, coverRequest.contentId);
+      if (thumbPath) {
+        await sendFile(res, thumbPath);
         return;
       }
 
@@ -1425,5 +1656,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(config.port, () => {
+  if (!config.smtpHost) {
+    console.warn("[SMTP] SMTP_HOST nao configurado. Recuperacao de senha vai cair no console.");
+  }
   console.log(`Pugotiread rodando em http://localhost:${config.port}`);
 });

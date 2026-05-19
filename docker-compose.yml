@@ -9,8 +9,11 @@ services:
       SESSION_SECRET: "troque-este-segredo-no-zimaos"
       GOOGLE_CLIENT_ID: "684109969699-ugf51n6innd2ci9i0vidh2n9p5nf5s4r.apps.googleusercontent.com"
       DATA_FILE: "/app/data/store.json"
+      DB_FILE: "/app/data/store.db"
+      CACHE_DIR: "/app/data/cache"
       MEDIA_ROOT: "/media"
+      VAULT_MEDIA_ROOT: "/media/Cofres"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
-      - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
+      - /DATA/ZimaOS-HD/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
     restart: unless-stopped

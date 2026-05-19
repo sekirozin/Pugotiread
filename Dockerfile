@@ -2,6 +2,8 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
+RUN apk add --no-cache python3 make g++
+
 COPY package*.json ./
 RUN npm install
 
@@ -12,9 +14,12 @@ RUN npm run build
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
+RUN apk add --no-cache python3 make g++
 ENV NODE_ENV=production
 ENV PORT=8099
 ENV DATA_FILE=/app/data/store.json
+ENV DB_FILE=/app/data/store.db
+ENV CACHE_DIR=/app/data/cache
 ENV PUBLIC_DIR=/app/public
 ENV CLIENT_DIR=/app/dist/client
 ENV MEDIA_ROOT=/media

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { cacheService } from "./cache.js";
 import type { ChapterInfo, ContentItem, Library, PageMediaType } from "../shared/types.js";
 
 const readableImageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"]);
@@ -165,16 +166,29 @@ async function toContentItem(library: Library, folderName: string): Promise<Cont
   };
 }
 
-// Cada pasta dentro de uma biblioteca vira um título.
-// Dentro de cada título, capítulos em subpastas são achatados em ordem natural.
+export async function getLibraryMtime(libraryPath: string): Promise<string> {
+  try {
+    const stat = await fs.stat(libraryPath);
+    return String(stat.mtimeMs);
+  } catch {
+    return "";
+  }
+}
+
 export async function scanLibrary(library: Library): Promise<ContentItem[]> {
+  const stamp = await getLibraryMtime(library.path);
+  const cached = cacheService.getCachedScan<ContentItem[]>(library.id, stamp);
+  if (cached) return cached;
+
   try {
     const entries = await fs.readdir(library.path, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory());
     const contents = (await Promise.all(directories.map((directory) => toContentItem(library, directory.name))))
       .filter((content): content is ContentItem => Boolean(content));
 
-    return contents.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
+    const sorted = contents.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
+    cacheService.setCachedScan(library.id, sorted, stamp);
+    return sorted;
   } catch {
     return [];
   }
@@ -193,6 +207,11 @@ export async function getContentCoverPath(library: Library, contentId: string): 
   }
 
   return resolveSafeMediaPath(library.path, workPath, cover);
+}
+
+export async function getContentCoverThumbnail(library: Library, contentId: string): Promise<string | null> {
+  const sourcePath = await getContentCoverPath(library, contentId);
+  return cacheService.getOrCreateCover(sourcePath, contentId);
 }
 
 function resolveSafeMediaPath(libraryPath: string, basePath: string, relativePath: string): string | null {

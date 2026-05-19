@@ -10,8 +10,12 @@
     "start": "node dist/server/index.js",
     "check": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "sharp": "^0.34.5"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.17.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
