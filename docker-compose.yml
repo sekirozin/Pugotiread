@@ -12,8 +12,8 @@ services:
       DB_FILE: "/app/data/store.db"
       CACHE_DIR: "/app/data/cache"
       MEDIA_ROOT: "/media"
-      VAULT_MEDIA_ROOT: "/media/Cofres"
+      VAULT_MEDIA_ROOT: "/media/Cofre"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
-      - /DATA/ZimaOS-HD/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
+      - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
     restart: unless-stopped

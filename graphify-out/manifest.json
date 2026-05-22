@@ -1,0 +1,362 @@
+{
+  "/home/sekiro/Projetos/Pugotiread/package.json": {
+    "mtime": 1779161713.8882165,
+    "ast_hash": "4f25d00331322e444151d2ce18d60541",
+    "semantic_hash": "4f25d00331322e444151d2ce18d60541"
+  },
+  "/home/sekiro/Projetos/Pugotiread/tsconfig.json": {
+    "mtime": 1779137836.8599887,
+    "ast_hash": "1f107c51a3ab756c382471b86ca37536",
+    "semantic_hash": "1f107c51a3ab756c382471b86ca37536"
+  },
+  "/home/sekiro/Projetos/Pugotiread/data/store.json": {
+    "mtime": 1779207308.5904138,
+    "ast_hash": "a45d4c39fcf12e7db09c7f57d6dfe30d",
+    "semantic_hash": "a45d4c39fcf12e7db09c7f57d6dfe30d"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/client/app.ts": {
+    "mtime": 1779206799.7476127,
+    "ast_hash": "8ca18de94f39aea90b4c537e5ed8dc09",
+    "semantic_hash": "8ca18de94f39aea90b4c537e5ed8dc09"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/client/app.js": {
+    "mtime": 1779304388.0906181,
+    "ast_hash": "70dfbe7dd9c9faa8b66bc66ac6c7c5fb",
+    "semantic_hash": "70dfbe7dd9c9faa8b66bc66ac6c7c5fb"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/client/app.d.ts": {
+    "mtime": 1779304388.0908246,
+    "ast_hash": "7e79dd8300d3efb6487090902efed3a1",
+    "semantic_hash": "7e79dd8300d3efb6487090902efed3a1"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/auth.ts": {
+    "mtime": 1779210160.726303,
+    "ast_hash": "b509fe0b363a76f4bee82b917a8b7b66",
+    "semantic_hash": "b509fe0b363a76f4bee82b917a8b7b66"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/config.ts": {
+    "mtime": 1779211934.2040992,
+    "ast_hash": "7964dfeb07c4011181d4bda6c6963b4c",
+    "semantic_hash": "7964dfeb07c4011181d4bda6c6963b4c"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/http.ts": {
+    "mtime": 1779206829.4829788,
+    "ast_hash": "d9a86de6fa3e5a022688d7a7525c4cb7",
+    "semantic_hash": "d9a86de6fa3e5a022688d7a7525c4cb7"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/index.ts": {
+    "mtime": 1779211949.2614472,
+    "ast_hash": "e294973e6989bfcdcc2a261a2a3cb063",
+    "semantic_hash": "e294973e6989bfcdcc2a261a2a3cb063"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/media.ts": {
+    "mtime": 1779161749.5997252,
+    "ast_hash": "217f8f8f6dfc1882634180008a0ccf6f",
+    "semantic_hash": "217f8f8f6dfc1882634180008a0ccf6f"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/store.ts": {
+    "mtime": 1779210278.7863932,
+    "ast_hash": "c543bbd12b0eb803be9d2130aee7b9ee",
+    "semantic_hash": "c543bbd12b0eb803be9d2130aee7b9ee"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/cache.ts": {
+    "mtime": 1779161729.8219967,
+    "ast_hash": "8b409fff2f03c7cfb23c66c93dc3c911",
+    "semantic_hash": "8b409fff2f03c7cfb23c66c93dc3c911"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/mailer.ts": {
+    "mtime": 1779211134.242304,
+    "ast_hash": "b5369ec17c336fa3705c8eb6622878e1",
+    "semantic_hash": "b5369ec17c336fa3705c8eb6622878e1"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/config.js": {
+    "mtime": 1779304388.0920553,
+    "ast_hash": "c219f03082f3d0e0427083552e1db644",
+    "semantic_hash": "c219f03082f3d0e0427083552e1db644"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/config.d.ts": {
+    "mtime": 1779304388.0924435,
+    "ast_hash": "3c2f11dbbfc59587877a28184798739f",
+    "semantic_hash": "3c2f11dbbfc59587877a28184798739f"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/store.js": {
+    "mtime": 1779304388.103585,
+    "ast_hash": "a691fef57c6f0fd9a60442f69ec39a42",
+    "semantic_hash": "a691fef57c6f0fd9a60442f69ec39a42"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/store.d.ts": {
+    "mtime": 1779304388.1058173,
+    "ast_hash": "a238cfe980c5cb80b19a225255ff703e",
+    "semantic_hash": "a238cfe980c5cb80b19a225255ff703e"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/auth.js": {
+    "mtime": 1779304388.1090035,
+    "ast_hash": "834cc8247e6ad14213e6d771770bb18a",
+    "semantic_hash": "834cc8247e6ad14213e6d771770bb18a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/auth.d.ts": {
+    "mtime": 1779304388.1096313,
+    "ast_hash": "d5d722977958cb686502ed16781e9ca1",
+    "semantic_hash": "d5d722977958cb686502ed16781e9ca1"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/cache.js": {
+    "mtime": 1779304388.1105983,
+    "ast_hash": "16d055b89379c15bcaee67d45c0df976",
+    "semantic_hash": "16d055b89379c15bcaee67d45c0df976"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/cache.d.ts": {
+    "mtime": 1779304388.1114638,
+    "ast_hash": "f7be123dc959302c724c42eb7b23b830",
+    "semantic_hash": "f7be123dc959302c724c42eb7b23b830"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/http.js": {
+    "mtime": 1779304388.1136138,
+    "ast_hash": "ad8d13f65d26ad9c56425e51cab2b41c",
+    "semantic_hash": "ad8d13f65d26ad9c56425e51cab2b41c"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/http.d.ts": {
+    "mtime": 1779304388.1143405,
+    "ast_hash": "90c2453abb449f689a18ff86e0a1bd7d",
+    "semantic_hash": "90c2453abb449f689a18ff86e0a1bd7d"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/mailer.js": {
+    "mtime": 1779304388.1163926,
+    "ast_hash": "ad799967bbec4defffeba0414a8f6a6a",
+    "semantic_hash": "ad799967bbec4defffeba0414a8f6a6a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/mailer.d.ts": {
+    "mtime": 1779304388.1166217,
+    "ast_hash": "37d03474de7cfe8588bdfd395ca55979",
+    "semantic_hash": "37d03474de7cfe8588bdfd395ca55979"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/media.js": {
+    "mtime": 1779304388.1198926,
+    "ast_hash": "9a2e01a4a321d5abcc8a7898bdda707e",
+    "semantic_hash": "9a2e01a4a321d5abcc8a7898bdda707e"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/media.d.ts": {
+    "mtime": 1779304388.120817,
+    "ast_hash": "3b18270bc642a00dac7f13c62b69272e",
+    "semantic_hash": "3b18270bc642a00dac7f13c62b69272e"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/index.js": {
+    "mtime": 1779304388.1468167,
+    "ast_hash": "24ceda51c522baa9fcb4a3892e4227d9",
+    "semantic_hash": "24ceda51c522baa9fcb4a3892e4227d9"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/server/index.d.ts": {
+    "mtime": 1779304388.147618,
+    "ast_hash": "38a9997bacc2b978b590f73ab4ff6e7a",
+    "semantic_hash": "38a9997bacc2b978b590f73ab4ff6e7a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/shared/types.ts": {
+    "mtime": 1779210014.0159228,
+    "ast_hash": "06e576e31dd00d5bb36896a18375f87c",
+    "semantic_hash": "06e576e31dd00d5bb36896a18375f87c"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/shared/types.js": {
+    "mtime": 1779304388.0158186,
+    "ast_hash": "099809e5f2145f0123c3f8e4d76cc2c2",
+    "semantic_hash": "099809e5f2145f0123c3f8e4d76cc2c2"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/shared/types.d.ts": {
+    "mtime": 1779304388.0168188,
+    "ast_hash": "a3c140d7d0b08cbc256d552b996fa88c",
+    "semantic_hash": "a3c140d7d0b08cbc256d552b996fa88c"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/app.ts": {
+    "mtime": 1779210823.2119806,
+    "ast_hash": "f1c6b53affaa978eb5533c04c3389861",
+    "semantic_hash": "f1c6b53affaa978eb5533c04c3389861"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/app.js": {
+    "mtime": 1779304388.0888176,
+    "ast_hash": "0cd434928795f881bec8ed03b8fc5e1a",
+    "semantic_hash": "0cd434928795f881bec8ed03b8fc5e1a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/app.d.ts": {
+    "mtime": 1779304388.0904365,
+    "ast_hash": "697aee221a566269045244bf3f096e60",
+    "semantic_hash": "697aee221a566269045244bf3f096e60"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/types.ts": {
+    "mtime": 1779210310.6669025,
+    "ast_hash": "82dca31826f1b9a402fa9629c3aa7a28",
+    "semantic_hash": "82dca31826f1b9a402fa9629c3aa7a28"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/store.ts": {
+    "mtime": 1779210312.2388785,
+    "ast_hash": "def78066804181b69657dfc42c9c9fde",
+    "semantic_hash": "def78066804181b69657dfc42c9c9fde"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/types.js": {
+    "mtime": 1779304388.020895,
+    "ast_hash": "099809e5f2145f0123c3f8e4d76cc2c2",
+    "semantic_hash": "099809e5f2145f0123c3f8e4d76cc2c2"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/types.d.ts": {
+    "mtime": 1779304388.0232267,
+    "ast_hash": "30314db62c8906b7370948775af87d69",
+    "semantic_hash": "30314db62c8906b7370948775af87d69"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/store.js": {
+    "mtime": 1779304388.0242274,
+    "ast_hash": "6d912b80cb0fea50cb00164c7b94a87d",
+    "semantic_hash": "6d912b80cb0fea50cb00164c7b94a87d"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/state/store.d.ts": {
+    "mtime": 1779304388.02457,
+    "ast_hash": "fe34bfdfe95c09552c0a2c4ce217f7e7",
+    "semantic_hash": "fe34bfdfe95c09552c0a2c4ce217f7e7"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/icons.ts": {
+    "mtime": 1779207352.2573736,
+    "ast_hash": "856f0f4b4512d47cb7ae3695f49cc222",
+    "semantic_hash": "856f0f4b4512d47cb7ae3695f49cc222"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/series-card.ts": {
+    "mtime": 1779207462.4312472,
+    "ast_hash": "4799681752d0d51a7a1fc3e8edb808d9",
+    "semantic_hash": "4799681752d0d51a7a1fc3e8edb808d9"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/avatar.ts": {
+    "mtime": 1779207683.9382644,
+    "ast_hash": "d04715e308ba29a91c8ed0c917ebccdf",
+    "semantic_hash": "d04715e308ba29a91c8ed0c917ebccdf"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/icons.js": {
+    "mtime": 1779304388.0180645,
+    "ast_hash": "0d2e22ab2d9f1402bc30f42b01b8f0c8",
+    "semantic_hash": "0d2e22ab2d9f1402bc30f42b01b8f0c8"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/icons.d.ts": {
+    "mtime": 1779304388.0192878,
+    "ast_hash": "822b40f8739bb5e3fb4fcef41fa04f90",
+    "semantic_hash": "822b40f8739bb5e3fb4fcef41fa04f90"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/avatar.js": {
+    "mtime": 1779304388.02016,
+    "ast_hash": "c29fe0b569adc91a097293e15e6a7fd4",
+    "semantic_hash": "c29fe0b569adc91a097293e15e6a7fd4"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/avatar.d.ts": {
+    "mtime": 1779304388.0204556,
+    "ast_hash": "0955297141dfa24644aefdc53435f64b",
+    "semantic_hash": "0955297141dfa24644aefdc53435f64b"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/series-card.js": {
+    "mtime": 1779304388.0295298,
+    "ast_hash": "46851e1cda5a9bfe5ab117cb010528d1",
+    "semantic_hash": "46851e1cda5a9bfe5ab117cb010528d1"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/series-card.d.ts": {
+    "mtime": 1779304388.029839,
+    "ast_hash": "cd806958473fcf06bf14f6030c5a29ea",
+    "semantic_hash": "cd806958473fcf06bf14f6030c5a29ea"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/topbar.ts": {
+    "mtime": 1779208962.090682,
+    "ast_hash": "46ce86c40e4846710c16e6c0a36a8bfc",
+    "semantic_hash": "46ce86c40e4846710c16e6c0a36a8bfc"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/sidebar.ts": {
+    "mtime": 1779207739.729222,
+    "ast_hash": "b21b4e33e5837729e84efdb879d72fed",
+    "semantic_hash": "b21b4e33e5837729e84efdb879d72fed"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/sidebar.js": {
+    "mtime": 1779304388.0260894,
+    "ast_hash": "a156192b0ac56b50d3f301fadf85185a",
+    "semantic_hash": "a156192b0ac56b50d3f301fadf85185a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/sidebar.d.ts": {
+    "mtime": 1779304388.0264237,
+    "ast_hash": "35ef4faea02518a5a120c6f294ec945f",
+    "semantic_hash": "35ef4faea02518a5a120c6f294ec945f"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/topbar.js": {
+    "mtime": 1779304388.0276165,
+    "ast_hash": "2f2ca8fe4bc2f979b368db76955dec4a",
+    "semantic_hash": "2f2ca8fe4bc2f979b368db76955dec4a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/components/layout/topbar.d.ts": {
+    "mtime": 1779304388.0279279,
+    "ast_hash": "9178a5a6501a8427dec9a4e7223f4041",
+    "semantic_hash": "9178a5a6501a8427dec9a4e7223f4041"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/api.ts": {
+    "mtime": 1779207396.648052,
+    "ast_hash": "6b8e3e40c1276e5741ad7cb078adfa5a",
+    "semantic_hash": "6b8e3e40c1276e5741ad7cb078adfa5a"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/search.ts": {
+    "mtime": 1779207882.8696597,
+    "ast_hash": "93a1b402cd0e3c8e30af94d867dfa7c8",
+    "semantic_hash": "93a1b402cd0e3c8e30af94d867dfa7c8"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/api.js": {
+    "mtime": 1779304388.0303202,
+    "ast_hash": "c3fda99e3ac61d727c7d0176c34abc28",
+    "semantic_hash": "c3fda99e3ac61d727c7d0176c34abc28"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/api.d.ts": {
+    "mtime": 1779304388.030549,
+    "ast_hash": "300da9e41bdf417c8745e5676e94664d",
+    "semantic_hash": "300da9e41bdf417c8745e5676e94664d"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/search.js": {
+    "mtime": 1779304388.0312297,
+    "ast_hash": "393715edc21a1d07705e308efa4edb6c",
+    "semantic_hash": "393715edc21a1d07705e308efa4edb6c"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/services/search.d.ts": {
+    "mtime": 1779304388.0315092,
+    "ast_hash": "b7fb5dcb119bee849e243399e36078dd",
+    "semantic_hash": "b7fb5dcb119bee849e243399e36078dd"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/shared.ts": {
+    "mtime": 1779207896.147333,
+    "ast_hash": "c71274e4df511101fe070f6e13995b0b",
+    "semantic_hash": "c71274e4df511101fe070f6e13995b0b"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/home.ts": {
+    "mtime": 1779207917.4283252,
+    "ast_hash": "61b17f255aa7bec165de3fe2da5f729e",
+    "semantic_hash": "61b17f255aa7bec165de3fe2da5f729e"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/library.ts": {
+    "mtime": 1779207933.2570937,
+    "ast_hash": "5d9aea41d26f6f2bd37ffd9bf5b1afe0",
+    "semantic_hash": "5d9aea41d26f6f2bd37ffd9bf5b1afe0"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/shared.js": {
+    "mtime": 1779304388.0320766,
+    "ast_hash": "e4f7047f83970ef41469b3165d99dc85",
+    "semantic_hash": "e4f7047f83970ef41469b3165d99dc85"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/shared.d.ts": {
+    "mtime": 1779304388.0323536,
+    "ast_hash": "533361b4d07b2c305265b6fa8accfcd3",
+    "semantic_hash": "533361b4d07b2c305265b6fa8accfcd3"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/home.js": {
+    "mtime": 1779304388.0328183,
+    "ast_hash": "93dbd154cb544d873fe5de1ca7ec4da8",
+    "semantic_hash": "93dbd154cb544d873fe5de1ca7ec4da8"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/home.d.ts": {
+    "mtime": 1779304388.0328183,
+    "ast_hash": "8d52e00ae3e8539cfea3e826cceffe11",
+    "semantic_hash": "8d52e00ae3e8539cfea3e826cceffe11"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/library.js": {
+    "mtime": 1779304388.0339468,
+    "ast_hash": "57012c8301124453cc7e97b5b0b6c42d",
+    "semantic_hash": "57012c8301124453cc7e97b5b0b6c42d"
+  },
+  "/home/sekiro/Projetos/Pugotiread/src/UI/Web/views/library.d.ts": {
+    "mtime": 1779304388.0339468,
+    "ast_hash": "c8704c2be59f9a1fcb71b38bc529a982",
+    "semantic_hash": "c8704c2be59f9a1fcb71b38bc529a982"
+  }
+}

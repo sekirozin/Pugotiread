@@ -141,10 +141,9 @@ async function toContentItem(library: Library, folderName: string): Promise<Cont
   ]);
   const id = makeContentId(library.id, folderName);
 
-  // A pasta da obra deve seguir o formato esperado:
-  // obra/metadata.json, obra/Capa.*, obra/Cap. 01/*.webp...
-  // Isso evita que uma pasta categoria, como /media, seja confundida com uma obra.
-  if (scan.pages.length === 0 || (!coverPath && !metadata.title)) {
+  // A pasta da obra precisa ter páginas legíveis. Capa e metadata são opcionais:
+  // quando não existem, a primeira página vira a capa.
+  if (scan.pages.length === 0) {
     return null;
   }
 

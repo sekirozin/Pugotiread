@@ -74,13 +74,16 @@ export function renderTopbar(userName: string): string {
           <span>Pugotiread</span>
         </button>
       </div>
-      <label class="search-shell">
-        <span class="visually-hidden">Pesquisar</span>
-        <input class="search" id="search" placeholder="Search (Procurar)" value="" />
-        <span class="search-ghost" id="search-ghost" aria-hidden="true"></span>
-        <kbd>Ctrl+Y</kbd>
-      </label>
       <div class="topbar-actions">
+        <div class="search-menu-shell">
+          <button class="icon-button" id="search-button" type="button" title="Pesquisar" aria-label="Pesquisar"><i class="fa-solid fa-magnifying-glass"></i></button>
+          <label class="search-shell">
+            <span class="visually-hidden">Pesquisar</span>
+            <input class="search" id="search" placeholder="Search (Procurar)" value="" />
+            <span class="search-ghost" id="search-ghost" aria-hidden="true"></span>
+            <kbd>Ctrl+Y</kbd>
+          </label>
+        </div>
         <div class="stats-menu-shell">
           <button class="icon-button" id="stats-button" type="button" title="Estatísticas" aria-expanded="${state.statsMenuOpen}">${renderIcon("stats")}</button>
           ${state.statsMenuOpen ? renderStatsMenu() : ""}

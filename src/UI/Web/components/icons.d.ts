@@ -1,0 +1,44 @@
+export declare const ICONS: {
+    readonly menu: "☰";
+    readonly badge: "▣";
+    readonly stats: "⌁";
+    readonly settings: "⚙";
+    readonly caret: "⌄";
+    readonly home: "⌂";
+    readonly want: "★";
+    readonly collections: "☷";
+    readonly lists: "≡";
+    readonly bookmarks: "▮";
+    readonly all: "▤";
+    readonly lock: "▣";
+    readonly people: "♟";
+    readonly libraryBook: "▰";
+    readonly libraryManga: "▣";
+    readonly close: "×";
+    readonly mark: "▣";
+    readonly file: "▧";
+    readonly author: "✎";
+    readonly release: "◷";
+    readonly genres: "▣";
+    readonly progress: "▸";
+    readonly rating: "★";
+    readonly continue: "▤";
+    readonly share: "↗";
+};
+export declare function renderIcon(name: keyof typeof ICONS): string;
+export declare const SIDEBAR_ICON_PATHS: {
+    readonly home: "/icons/home/home_32x32.png";
+    readonly want: "/icons/star/star_32x32.png";
+    readonly collections: "/icons/medal/medal_32x32.png";
+    readonly lists: "/icons/list/list_32x32.png";
+    readonly bookmarks: "/icons/markbook/markbook_32x32.png";
+    readonly all: "/icons/book/book_32x32.png";
+    readonly people: "/icons/users/users_32x32.png";
+    readonly book: "/icons/book/book_32x32.png";
+    readonly pencil: "/icons/pencil/pencil_32x32.png";
+    readonly vaultOpen: "/icons/lock_open/lock_open_32x32.png";
+    readonly vaultClosed: "/icons/lock_closed/lock_closed_32x32.png";
+    readonly trash: "/icons/trash/trash_32x32.png";
+};
+export declare function renderSidebarIcon(name: keyof typeof SIDEBAR_ICON_PATHS, label: string): string;
+//# sourceMappingURL=icons.d.ts.map

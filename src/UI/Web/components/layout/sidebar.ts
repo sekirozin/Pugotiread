@@ -57,9 +57,10 @@ function renderVaultContextMenu(): string {
     <span class="library-context-menu" role="menu" aria-label="Opções do cofre pessoal">
       ${
         state.vaultUnlocked
-          ? `<span class="library-menu-item" id="lock-vault-sidebar-button" role="menuitem">Bloquear cofre</span>`
+          ? `<span class="library-menu-item" id="lock-vault-sidebar-button" role="menuitem">Bloquear cofre <span class="menu-shortcut">Ctrl+Shift+.</span></span>`
           : `<span class="library-menu-item disabled" role="menuitem">Cofre bloqueado</span>`
       }
+      <span class="library-menu-item" id="hide-vault-sidebar-button" role="menuitem">Esconder <span class="menu-shortcut">Ctrl+Shift+L</span></span>
     </span>
   `;
 }
@@ -94,7 +95,7 @@ function renderMainSidebar(): string {
       ${renderNavButton("lists", renderSidebarIcon("lists", "Listas de leitura"), "Listas de leitura")}
       ${renderNavButton("bookmarks", renderSidebarIcon("bookmarks", "Marcadores"), "Marcadores")}
       ${renderNavButton("all", renderSidebarIcon("all", "Todos os títulos"), "Todos os títulos")}
-      ${state.user?.role === "admin" ? renderVaultNavButton() : ""}
+      ${state.user?.role === "admin" && !state.vaultHiddenFromMenu ? renderVaultNavButton() : ""}
       ${renderNavButton("people", renderSidebarIcon("people", "Pessoas"), "Pessoas")}
     </nav>
     <div class="side-section">

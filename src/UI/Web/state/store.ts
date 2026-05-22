@@ -56,7 +56,7 @@ export const state: AppState = {
     description: ""
   },
   folderBrowser: null,
-  sidebarCollapsed: false,
+  sidebarCollapsed: true,
   mobileNavOpen: false,
   darkMode: localStorage.getItem("pugotiread-dark-mode") !== "light",
   search: "",
@@ -88,6 +88,7 @@ export const state: AppState = {
   passwordResetMessage: "",
   passwordResetError: "",
   vaultUnlocked: false,
+  vaultHiddenFromMenu: localStorage.getItem("pugotiread-vault-hidden") === "true",
   vaultToken: "",
   vaultError: "",
   vaultTimeoutMinutes: defaultVaultTimeoutMinutes,

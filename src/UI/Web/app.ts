@@ -215,6 +215,32 @@ function applyTheme(): void {
   document.documentElement.dataset.theme = state.darkMode ? "dark" : "light";
 }
 
+function renderLoadingScreen(message = "Carregando obras", description = "Preparando as bibliotecas disponíveis para você."): void {
+  app.innerHTML = `
+    <main class="boot-loading-screen" aria-live="polite" aria-busy="true">
+      <section class="boot-loading-panel">
+        <div class="boot-loading-brand">
+          <span class="brand-badge">${renderSidebarIcon("book", "Pugotiread")}</span>
+          <strong>Pugotiread</strong>
+        </div>
+        <div class="boot-loading-orbit" aria-hidden="true">
+          <span></span>
+        </div>
+        <div class="boot-loading-copy">
+          <h1>${escapeHtml(message)}</h1>
+          <p>${escapeHtml(description)}</p>
+        </div>
+        <div class="boot-loading-skeleton" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </section>
+    </main>
+  `;
+}
+
 async function boot(): Promise<void> {
   applyTheme();
   if (window.location.pathname.startsWith("/reset-password/")) {
@@ -234,12 +260,14 @@ async function boot(): Promise<void> {
   }
 
   try {
+    renderLoadingScreen("Entrando no Pugotiread", "Validando sua sessão antes de carregar as obras.");
     const payload = await api<{ user: PublicUser }>("/api/me");
     state.user = payload.user;
     if (state.user.needsNickname) {
       renderNicknameSetup();
       return;
     }
+    renderLoadingScreen();
     await loadHome();
   } catch {
     try {
@@ -903,9 +931,9 @@ function renderVaultView(): string {
         <form class="vault-unlock-form" id="vault-unlock-form">
           <label class="form-row">
             <span>Senha</span>
-            <input class="input" name="password" type="password" autocomplete="current-password" required />
+            <input class="input" id="vault-password-input" name="password" type="password" autocomplete="current-password" required />
           </label>
-          <p class="error">${escapeHtml(state.vaultError)}</p>
+          ${state.vaultError ? `<p class="error vault-error">${escapeHtml(state.vaultError)}</p>` : ""}
           <button class="button" type="submit">Desbloquear cofre</button>
         </form>
       </section>
@@ -2188,6 +2216,23 @@ async function lockPersonalVault(): Promise<void> {
   renderShell();
 }
 
+function toggleVaultMenuVisibility(): void {
+  if (state.user?.role !== "admin") {
+    return;
+  }
+
+  state.vaultHiddenFromMenu = !state.vaultHiddenFromMenu;
+  localStorage.setItem("pugotiread-vault-hidden", String(state.vaultHiddenFromMenu));
+  state.vaultMenuOpen = false;
+  if (state.vaultHiddenFromMenu && state.activeView === "vault") {
+    state.activeView = "home";
+    state.activeLibraryId = null;
+    state.activeSeriesId = null;
+    state.reader = null;
+  }
+  renderShell();
+}
+
 function clearVaultInactivityTimer(): void {
   if (vaultInactivityTimer) {
     window.clearTimeout(vaultInactivityTimer);
@@ -3114,6 +3159,20 @@ function getNextFittingMode(fitting: FittingMode): FittingMode {
   return "height";
 }
 
+function clampReaderZoom(zoom: number): number {
+  return Math.min(Math.max(Math.round(zoom), 50), 250);
+}
+
+function setReaderZoom(zoom: number): void {
+  if (!state.reader) return;
+  state.reader.zoom = clampReaderZoom(zoom);
+  state.reader.controlsVisible = true;
+  renderShell();
+  if (state.reader.mode === "vertical-scroll") {
+    requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
+  }
+}
+
 function getContentProgressPercent(content: ContentItem, page: number): number {
   if (content.pageCount <= 1) {
     return content.pageCount === 0 ? 0 : 100;
@@ -3179,7 +3238,7 @@ function getAdjacentChapterStartPage(content: ContentItem, page: number, directi
 
 function renderReaderOverlay(): void {
   if (!state.reader) return;
-  const { content, page, mode, fitting, brightness, controlsVisible } = state.reader;
+  const { content, page, mode, fitting, zoom, brightness, controlsVisible } = state.reader;
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
   const pageBookmarked = isPageBookmarked(content.id, safePage);
   const chapterProgress = getReaderChapterProgress(content, safePage);
@@ -3231,6 +3290,11 @@ function renderReaderOverlay(): void {
         <span class="icon"><i class="fa-solid fa-arrows-left-right"></i></span>
         <span class="label">Direção</span>
       </button>
+      <div class="reader-zoom-control" aria-label="Zoom">
+        <button class="reader-btn-icon compact" data-reader-action="zoom-out" type="button" title="Diminuir zoom" aria-label="Diminuir zoom">−</button>
+        <button class="reader-zoom-value" data-reader-action="zoom-reset" type="button" title="Resetar zoom" aria-label="Resetar zoom">${zoom}%</button>
+        <button class="reader-btn-icon compact" data-reader-action="zoom-in" type="button" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
+      </div>
       <div class="reader-brightness-control">
         <span><i class="fa-solid fa-sun"></i></span>
         <input data-reader-brightness type="range" min="10" max="100" value="${brightness}" aria-label="Brilho" />
@@ -3252,6 +3316,9 @@ function renderReaderOverlay(): void {
   if (readerSection) {
     readerSection.classList.toggle("controls-visible", controlsVisible);
     readerSection.style.setProperty("--reader-brightness", `${brightness}%`);
+    readerSection.style.setProperty("--reader-zoom-percent", `${zoom}%`);
+    readerSection.style.setProperty("--reader-zoom-scale", String(zoom / 100));
+    readerSection.style.setProperty("--reader-max-width", `${Math.round(980 * (zoom / 100))}px`);
   }
 }
 
@@ -3268,10 +3335,11 @@ function renderReader(content: ContentItem, page: number, mode: ReaderMode): str
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
   const controlsVisible = state.reader?.controlsVisible ?? false;
   const fitting = state.reader?.fitting ?? "height";
+  const zoom = state.reader?.zoom ?? 100;
   const brightness = state.reader?.brightness ?? 100;
   const paginationClass = mode === "paged-vertical" ? "vertical" : "horizontal";
   return `
-    <section class="reader ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%">
+    <section class="reader ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%; --reader-zoom-percent: ${zoom}%; --reader-zoom-scale: ${zoom / 100}; --reader-max-width: ${Math.round(980 * (zoom / 100))}px">
       <div class="reader-pagination ${paginationClass}">
         <button class="zone prev" data-reader-action="page-prev" aria-label="Página anterior"></button>
         <button class="zone next" data-reader-action="page-next" aria-label="Próxima página"></button>
@@ -3372,6 +3440,10 @@ function bindShellEvents(): void {
     openView("home");
   });
 
+  document.querySelector("#search-button")?.addEventListener("click", () => {
+    document.querySelector<HTMLInputElement>("#search")?.focus();
+  });
+
   document.querySelector("#settings-button")?.addEventListener("click", () => {
     closeNavigationPanels();
     closeMobileNavigation();
@@ -3460,6 +3532,13 @@ function bindShellEvents(): void {
     void unlockPersonalVault(event.currentTarget as HTMLFormElement);
   });
 
+  document.querySelector<HTMLInputElement>("#vault-password-input")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const form = (event.target as HTMLInputElement).form;
+    if (form) void unlockPersonalVault(form);
+  });
+
   document.querySelector("#lock-vault-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -3477,6 +3556,12 @@ function bindShellEvents(): void {
     event.preventDefault();
     event.stopPropagation();
     void lockPersonalVault();
+  });
+
+  document.querySelector("#hide-vault-sidebar-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleVaultMenuVisibility();
   });
 
   document.querySelector("#add-collection-button")?.addEventListener("click", openCollectionModal);
@@ -4297,7 +4382,7 @@ function updateReaderFullscreenButton(): void {
 
 function openReader(content: ContentItem, page: number): void {
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
-  state.reader = { content, page: safePage, mode: "vertical-scroll", fitting: "height", brightness: 100, controlsVisible: false };
+  state.reader = { content, page: safePage, mode: "vertical-scroll", fitting: "height", zoom: 100, brightness: 100, controlsVisible: false };
   state.activeSeriesId = content.id;
 }
 
@@ -4667,6 +4752,18 @@ function bindReaderDelegatedEvents(): void {
         renderShell();
         break;
 
+      case "zoom-in":
+        setReaderZoom(state.reader.zoom + 25);
+        break;
+
+      case "zoom-out":
+        setReaderZoom(state.reader.zoom - 25);
+        break;
+
+      case "zoom-reset":
+        setReaderZoom(100);
+        break;
+
       case "toggle-direction":
         // In Kavita, this toggles between LTR and RTL reading direction.
         // For now, cycle reader mode as a proxy.
@@ -4778,6 +4875,20 @@ void boot();
 bindReaderDelegatedEvents();
 
 document.addEventListener("keydown", (event) => {
+  if (state.user?.role === "admin" && event.ctrlKey && event.shiftKey && event.code === "KeyL") {
+    event.preventDefault();
+    toggleVaultMenuVisibility();
+    return;
+  }
+
+  if (state.user?.role === "admin" && event.ctrlKey && event.shiftKey && event.code === "Period") {
+    event.preventDefault();
+    if (state.vaultUnlocked) {
+      void lockPersonalVault();
+    }
+    return;
+  }
+
   if (state.reader) {
     switch (event.key) {
       case "ArrowLeft":
@@ -4819,6 +4930,19 @@ document.addEventListener("keydown", (event) => {
         event.preventDefault();
         state.reader.fitting = getNextFittingMode(state.reader.fitting);
         renderShell();
+        break;
+      case "+":
+      case "=":
+        event.preventDefault();
+        setReaderZoom(state.reader.zoom + 25);
+        break;
+      case "-":
+        event.preventDefault();
+        setReaderZoom(state.reader.zoom - 25);
+        break;
+      case "0":
+        event.preventDefault();
+        setReaderZoom(100);
         break;
       case "m":
         event.preventDefault();

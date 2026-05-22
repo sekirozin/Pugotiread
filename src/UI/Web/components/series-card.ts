@@ -1,6 +1,6 @@
 import type { ContentItem } from "../../../shared/types.js";
 import { state } from "../state/store.js";
-import { renderIcon } from "./icons.js";
+import { renderIcon, renderSidebarIcon } from "./icons.js";
 
 function escapeHtml(value: string): string {
   return value
@@ -9,6 +9,29 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function renderLatestChapters(content: ContentItem): string {
+  const latestChapters = content.chapters
+    .filter((chapter) => !chapter.isSpecial)
+    .slice(-3)
+    .reverse();
+
+  if (latestChapters.length === 0) {
+    return "";
+  }
+
+  return `
+    <div class="series-latest-chapters" aria-label="Últimos capítulos de ${escapeHtml(content.title)}">
+      ${latestChapters.map((chapter) => `
+        <div class="series-latest-chapter">
+          <span class="chapter-status-dot" aria-hidden="true"></span>
+          <span class="series-latest-chapter-name">${escapeHtml(chapter.name)}</span>
+          <span class="series-latest-chapter-pages">${chapter.pageCount} pág.</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 export function renderSeriesCard(content: ContentItem, cardKey = content.id): string {
@@ -28,14 +51,15 @@ export function renderSeriesCard(content: ContentItem, cardKey = content.id): st
             ? `<button class="series-mark-button${marked ? " active" : ""}" data-series-mark-toggle="${content.id}" type="button" aria-label="${marked ? "Remover marcação de" : "Marcar"} ${escapeHtml(content.title)}">${renderIcon("mark")}</button>`
             : ""
         }
-        <button class="series-continue-button" data-series-continue="${content.id}" type="button" aria-label="Continuar leitura de ${escapeHtml(content.title)}">${renderIcon("continue")}</button>
+        <button class="series-continue-button" data-series-continue="${content.id}" type="button" aria-label="Continuar leitura de ${escapeHtml(content.title)}">${renderSidebarIcon("book", "Continuar leitura")}</button>
       </div>
       <div class="series-footer">
-        <span class="series-file-icon" aria-hidden="true">${renderIcon("file")}</span>
+        <span class="series-file-icon" aria-hidden="true">${renderSidebarIcon("book", "Obra")}</span>
         <span class="content-title">${escapeHtml(content.title)}</span>
         <button class="series-menu-button" data-series-menu-key="${escapeHtml(cardKey)}" type="button" aria-label="Opções de ${escapeHtml(content.title)}" aria-expanded="${menuOpen}">⋮</button>
       </div>
       ${menuOpen ? renderSeriesContextMenu(content, cardKey) : ""}
+      ${renderLatestChapters(content)}
       <p class="series-meta">${content.pageCount} páginas${marked ? " · marcado" : ""}</p>
       <button class="series-open" data-series-open="${content.id}" aria-label="Abrir ${escapeHtml(content.title)}"></button>
     </article>

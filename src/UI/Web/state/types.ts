@@ -128,6 +128,7 @@ export type AppState = {
   passwordResetMessage: string;
   passwordResetError: string;
   vaultUnlocked: boolean;
+  vaultHiddenFromMenu: boolean;
   vaultToken: string;
   vaultError: string;
   vaultTimeoutMinutes: number;
@@ -156,6 +157,7 @@ export type AppState = {
     page: number;
     mode: ReaderMode;
     fitting: FittingMode;
+    zoom: number;
     brightness: number;
     controlsVisible: boolean;
   } | null;

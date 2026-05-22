@@ -8,7 +8,31 @@
     <link rel="stylesheet" href="/styles.css?v=reader-controls-20260518" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main class="boot-loading-screen" aria-live="polite" aria-busy="true">
+        <section class="boot-loading-panel">
+          <div class="boot-loading-brand">
+            <span class="brand-badge">
+              <img class="nav-image-icon" src="/icons/book/book_32x32.png" alt="" />
+            </span>
+            <strong>Pugotiread</strong>
+          </div>
+          <div class="boot-loading-orbit" aria-hidden="true">
+            <span></span>
+          </div>
+          <div class="boot-loading-copy">
+            <h1>Carregando Pugotiread</h1>
+            <p>Preparando sua biblioteca.</p>
+          </div>
+          <div class="boot-loading-skeleton" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/app.js?v=reader-controls-20260518"></script>
   </body>
 </html>
