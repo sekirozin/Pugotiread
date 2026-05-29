@@ -46,6 +46,20 @@ class CacheService {
     }
   }
 
+  async invalidateCover(contentId: string): Promise<void> {
+    await fs.rm(this.getCoverThumbnailPath(contentId), { force: true });
+  }
+
+  async invalidateLibraryCovers(libraryId: string): Promise<void> {
+    const coversDir = path.join(config.cacheDir, "covers");
+    const entries = await fs.readdir(coversDir).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((entry) => entry.startsWith(`${libraryId}:`))
+        .map((entry) => fs.rm(path.join(coversDir, entry), { force: true }))
+    );
+  }
+
   getCachedScan<T>(key: string, stamp: string): T | null {
     const entry = this.scanCache.get(key);
     if (!entry || entry.stamp !== stamp) return null;

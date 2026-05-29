@@ -1,6 +1,15 @@
 import type { AppState } from "./types.js";
+import type { ServerSettings } from "../../../shared/types.js";
 
 export const defaultVaultTimeoutMinutes = 5;
+export const defaultReadingDefaults: ServerSettings["readingDefaults"] = {
+  manga: { mode: "horizontal", fitting: "height", controlsVisible: false },
+  manhwa: { mode: "vertical-scroll", fitting: "width", controlsVisible: false },
+  book: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
+  comic: { mode: "horizontal", fitting: "height", controlsVisible: false },
+  lightNovel: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
+  other: { mode: "vertical-scroll", fitting: "height", controlsVisible: false }
+};
 
 export const state: AppState = {
   user: null,
@@ -10,6 +19,7 @@ export const state: AppState = {
   peopleUsers: [],
   contents: [],
   homeContents: [],
+  readingNowContents: [],
   activeLibraryId: null,
   loadingLibraryId: null,
   libraryLoadError: "",
@@ -66,6 +76,7 @@ export const state: AppState = {
   wantToRead: [],
   readingList: [],
   collections: [],
+  homeLayout: (localStorage.getItem("pugotiread-home-layout") === "list" ? "list" : "grid"),
   seriesChapterOrder: "asc",
   seriesChapterLayout: "list",
   seriesTab: "chapters",
@@ -95,6 +106,9 @@ export const state: AppState = {
   vaultSettingsDraft: String(defaultVaultTimeoutMinutes),
   vaultSettingsMessage: "",
   vaultSettingsError: "",
+  readingSettingsDraft: structuredClone(defaultReadingDefaults),
+  readingSettingsMessage: "",
+  readingSettingsError: "",
   adminUserModalOpen: false,
   adminUserModalMode: "create",
   adminUserEditingId: null,

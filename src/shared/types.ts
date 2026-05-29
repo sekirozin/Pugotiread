@@ -1,8 +1,10 @@
 export type UserRole = "admin" | "user";
 
-export type LibraryKind = "manga" | "manhwa" | "book" | "other";
+export type LibraryKind = "manga" | "manhwa" | "book" | "comic" | "lightNovel" | "other";
 
-export type PageMediaType = "image" | "pdf";
+export type PageMediaType = "image" | "pdf" | "epub";
+export type ReaderMode = "horizontal" | "paged-vertical" | "vertical-scroll";
+export type ReaderFittingMode = "height" | "width" | "original";
 
 export interface User {
   id: string;
@@ -60,6 +62,7 @@ export interface ChapterInfo {
   startPage: number;
   pageCount: number;
   isSpecial: boolean;
+  addedAt?: string | null;
 }
 
 export interface ContentItem {
@@ -155,6 +158,11 @@ export interface PublicContentReview {
 
 export interface ServerSettings {
   vaultTimeoutMinutes: number;
+  readingDefaults: Record<LibraryKind, {
+    mode: ReaderMode;
+    fitting: ReaderFittingMode;
+    controlsVisible: boolean;
+  }>;
 }
 
 export interface StoreShape {

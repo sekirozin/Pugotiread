@@ -358,5 +358,880 @@
     "mtime": 1779304388.0339468,
     "ast_hash": "c8704c2be59f9a1fcb71b38bc529a982",
     "semantic_hash": "c8704c2be59f9a1fcb71b38bc529a982"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/package.json": {
+    "mtime": 1779499802.5346146,
+    "ast_hash": "4f25d00331322e444151d2ce18d60541",
+    "semantic_hash": "4f25d00331322e444151d2ce18d60541"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/tsconfig.json": {
+    "mtime": 1779137836.8599887,
+    "ast_hash": "1f107c51a3ab756c382471b86ca37536",
+    "semantic_hash": "1f107c51a3ab756c382471b86ca37536"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/store.json": {
+    "mtime": 1779207308.5904138,
+    "ast_hash": "a45d4c39fcf12e7db09c7f57d6dfe30d",
+    "semantic_hash": "a45d4c39fcf12e7db09c7f57d6dfe30d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/client/app.ts": {
+    "mtime": 1779206799.7476127,
+    "ast_hash": "8ca18de94f39aea90b4c537e5ed8dc09",
+    "semantic_hash": "8ca18de94f39aea90b4c537e5ed8dc09"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/client/app.d.ts": {
+    "mtime": 1779304388.0908246,
+    "ast_hash": "7e79dd8300d3efb6487090902efed3a1",
+    "semantic_hash": "7e79dd8300d3efb6487090902efed3a1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/client/app.js": {
+    "mtime": 1779304388.0906181,
+    "ast_hash": "70dfbe7dd9c9faa8b66bc66ac6c7c5fb",
+    "semantic_hash": "70dfbe7dd9c9faa8b66bc66ac6c7c5fb"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/auth.ts": {
+    "mtime": 1779210160.726303,
+    "ast_hash": "b509fe0b363a76f4bee82b917a8b7b66",
+    "semantic_hash": "b509fe0b363a76f4bee82b917a8b7b66"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/config.ts": {
+    "mtime": 1779670040.7703662,
+    "ast_hash": "7964dfeb07c4011181d4bda6c6963b4c",
+    "semantic_hash": "7964dfeb07c4011181d4bda6c6963b4c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/http.ts": {
+    "mtime": 1779584600.578301,
+    "ast_hash": "4e128b7fb0de44eb01e76e2de3ea19e0",
+    "semantic_hash": "4e128b7fb0de44eb01e76e2de3ea19e0"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/index.ts": {
+    "mtime": 1779755191.6392024,
+    "ast_hash": "496bb7273c695dc6266d0875ad51a482",
+    "semantic_hash": "496bb7273c695dc6266d0875ad51a482"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/store.ts": {
+    "mtime": 1779587292.3864396,
+    "ast_hash": "951086bf3c92af97a80168e593e519ce",
+    "semantic_hash": "951086bf3c92af97a80168e593e519ce"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/cache.ts": {
+    "mtime": 1779584591.972462,
+    "ast_hash": "99cfda464c83d6d95134b4aa7c47a15b",
+    "semantic_hash": "99cfda464c83d6d95134b4aa7c47a15b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/mailer.ts": {
+    "mtime": 1779211134.242304,
+    "ast_hash": "b5369ec17c336fa3705c8eb6622878e1",
+    "semantic_hash": "b5369ec17c336fa3705c8eb6622878e1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/auth.d.ts": {
+    "mtime": 1779304388.1096313,
+    "ast_hash": "d5d722977958cb686502ed16781e9ca1",
+    "semantic_hash": "d5d722977958cb686502ed16781e9ca1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/auth.js": {
+    "mtime": 1779304388.1090035,
+    "ast_hash": "834cc8247e6ad14213e6d771770bb18a",
+    "semantic_hash": "834cc8247e6ad14213e6d771770bb18a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/cache.d.ts": {
+    "mtime": 1779304388.1114638,
+    "ast_hash": "f7be123dc959302c724c42eb7b23b830",
+    "semantic_hash": "f7be123dc959302c724c42eb7b23b830"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/cache.js": {
+    "mtime": 1779304388.1105983,
+    "ast_hash": "16d055b89379c15bcaee67d45c0df976",
+    "semantic_hash": "16d055b89379c15bcaee67d45c0df976"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/config.d.ts": {
+    "mtime": 1779304388.0924435,
+    "ast_hash": "3c2f11dbbfc59587877a28184798739f",
+    "semantic_hash": "3c2f11dbbfc59587877a28184798739f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/config.js": {
+    "mtime": 1779304388.0920553,
+    "ast_hash": "c219f03082f3d0e0427083552e1db644",
+    "semantic_hash": "c219f03082f3d0e0427083552e1db644"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/http.d.ts": {
+    "mtime": 1779304388.1143405,
+    "ast_hash": "90c2453abb449f689a18ff86e0a1bd7d",
+    "semantic_hash": "90c2453abb449f689a18ff86e0a1bd7d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/http.js": {
+    "mtime": 1779304388.1136138,
+    "ast_hash": "ad8d13f65d26ad9c56425e51cab2b41c",
+    "semantic_hash": "ad8d13f65d26ad9c56425e51cab2b41c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/index.d.ts": {
+    "mtime": 1779304388.147618,
+    "ast_hash": "38a9997bacc2b978b590f73ab4ff6e7a",
+    "semantic_hash": "38a9997bacc2b978b590f73ab4ff6e7a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/index.js": {
+    "mtime": 1779304388.1468167,
+    "ast_hash": "24ceda51c522baa9fcb4a3892e4227d9",
+    "semantic_hash": "24ceda51c522baa9fcb4a3892e4227d9"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/mailer.d.ts": {
+    "mtime": 1779304388.1166217,
+    "ast_hash": "37d03474de7cfe8588bdfd395ca55979",
+    "semantic_hash": "37d03474de7cfe8588bdfd395ca55979"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/mailer.js": {
+    "mtime": 1779304388.1163926,
+    "ast_hash": "ad799967bbec4defffeba0414a8f6a6a",
+    "semantic_hash": "ad799967bbec4defffeba0414a8f6a6a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/media.d.ts": {
+    "mtime": 1779304388.120817,
+    "ast_hash": "3b18270bc642a00dac7f13c62b69272e",
+    "semantic_hash": "3b18270bc642a00dac7f13c62b69272e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/media.js": {
+    "mtime": 1779304388.1198926,
+    "ast_hash": "9a2e01a4a321d5abcc8a7898bdda707e",
+    "semantic_hash": "9a2e01a4a321d5abcc8a7898bdda707e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/store.d.ts": {
+    "mtime": 1779304388.1058173,
+    "ast_hash": "a238cfe980c5cb80b19a225255ff703e",
+    "semantic_hash": "a238cfe980c5cb80b19a225255ff703e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/store.js": {
+    "mtime": 1779304388.103585,
+    "ast_hash": "a691fef57c6f0fd9a60442f69ec39a42",
+    "semantic_hash": "a691fef57c6f0fd9a60442f69ec39a42"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/server/media.ts": {
+    "mtime": 1779650135.654689,
+    "ast_hash": "ffc150eceb22634d85a531b785597f54",
+    "semantic_hash": "ffc150eceb22634d85a531b785597f54"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/shared/types.ts": {
+    "mtime": 1779670074.4608257,
+    "ast_hash": "8bb54efcbdf6251db67ddf1a81028829",
+    "semantic_hash": "8bb54efcbdf6251db67ddf1a81028829"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/shared/types.d.ts": {
+    "mtime": 1779304388.0168188,
+    "ast_hash": "a3c140d7d0b08cbc256d552b996fa88c",
+    "semantic_hash": "a3c140d7d0b08cbc256d552b996fa88c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/shared/types.js": {
+    "mtime": 1779304388.0158186,
+    "ast_hash": "099809e5f2145f0123c3f8e4d76cc2c2",
+    "semantic_hash": "099809e5f2145f0123c3f8e4d76cc2c2"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/app.d.ts": {
+    "mtime": 1779304388.0904365,
+    "ast_hash": "697aee221a566269045244bf3f096e60",
+    "semantic_hash": "697aee221a566269045244bf3f096e60"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/app.js": {
+    "mtime": 1779304388.0888176,
+    "ast_hash": "0cd434928795f881bec8ed03b8fc5e1a",
+    "semantic_hash": "0cd434928795f881bec8ed03b8fc5e1a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/app.ts": {
+    "mtime": 1779755191.6412024,
+    "ast_hash": "b0a7d68e629f529e329989aa1460a6cb",
+    "semantic_hash": "b0a7d68e629f529e329989aa1460a6cb"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/types.ts": {
+    "mtime": 1779755191.6472023,
+    "ast_hash": "3c986f88f12948125311e3b93b04acb9",
+    "semantic_hash": "3c986f88f12948125311e3b93b04acb9"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/store.d.ts": {
+    "mtime": 1779304388.02457,
+    "ast_hash": "fe34bfdfe95c09552c0a2c4ce217f7e7",
+    "semantic_hash": "fe34bfdfe95c09552c0a2c4ce217f7e7"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/store.js": {
+    "mtime": 1779304388.0242274,
+    "ast_hash": "6d912b80cb0fea50cb00164c7b94a87d",
+    "semantic_hash": "6d912b80cb0fea50cb00164c7b94a87d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/store.ts": {
+    "mtime": 1779755191.6422024,
+    "ast_hash": "366984f4de2881b16d2dc4825caf258c",
+    "semantic_hash": "366984f4de2881b16d2dc4825caf258c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/types.d.ts": {
+    "mtime": 1779304388.0232267,
+    "ast_hash": "30314db62c8906b7370948775af87d69",
+    "semantic_hash": "30314db62c8906b7370948775af87d69"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/state/types.js": {
+    "mtime": 1779304388.020895,
+    "ast_hash": "099809e5f2145f0123c3f8e4d76cc2c2",
+    "semantic_hash": "099809e5f2145f0123c3f8e4d76cc2c2"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/avatar.ts": {
+    "mtime": 1779207683.9382644,
+    "ast_hash": "d04715e308ba29a91c8ed0c917ebccdf",
+    "semantic_hash": "d04715e308ba29a91c8ed0c917ebccdf"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/series-card.ts": {
+    "mtime": 1779650149.774443,
+    "ast_hash": "18106f1d351ab8a034b5f704d21c18b4",
+    "semantic_hash": "18106f1d351ab8a034b5f704d21c18b4"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/avatar.d.ts": {
+    "mtime": 1779304388.0204556,
+    "ast_hash": "0955297141dfa24644aefdc53435f64b",
+    "semantic_hash": "0955297141dfa24644aefdc53435f64b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/avatar.js": {
+    "mtime": 1779304388.02016,
+    "ast_hash": "c29fe0b569adc91a097293e15e6a7fd4",
+    "semantic_hash": "c29fe0b569adc91a097293e15e6a7fd4"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/icons.d.ts": {
+    "mtime": 1779304388.0192878,
+    "ast_hash": "822b40f8739bb5e3fb4fcef41fa04f90",
+    "semantic_hash": "822b40f8739bb5e3fb4fcef41fa04f90"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/icons.js": {
+    "mtime": 1779304388.0180645,
+    "ast_hash": "0d2e22ab2d9f1402bc30f42b01b8f0c8",
+    "semantic_hash": "0d2e22ab2d9f1402bc30f42b01b8f0c8"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/series-card.d.ts": {
+    "mtime": 1779304388.029839,
+    "ast_hash": "cd806958473fcf06bf14f6030c5a29ea",
+    "semantic_hash": "cd806958473fcf06bf14f6030c5a29ea"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/series-card.js": {
+    "mtime": 1779304388.0295298,
+    "ast_hash": "46851e1cda5a9bfe5ab117cb010528d1",
+    "semantic_hash": "46851e1cda5a9bfe5ab117cb010528d1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/icons.ts": {
+    "mtime": 1779592203.0881517,
+    "ast_hash": "fb4c9e60eaaf5a44a55227cdae315799",
+    "semantic_hash": "fb4c9e60eaaf5a44a55227cdae315799"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/sidebar.ts": {
+    "mtime": 1779755191.6412024,
+    "ast_hash": "65689880c6514e04ac78b37032b6322f",
+    "semantic_hash": "65689880c6514e04ac78b37032b6322f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/sidebar.d.ts": {
+    "mtime": 1779304388.0264237,
+    "ast_hash": "35ef4faea02518a5a120c6f294ec945f",
+    "semantic_hash": "35ef4faea02518a5a120c6f294ec945f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/sidebar.js": {
+    "mtime": 1779304388.0260894,
+    "ast_hash": "a156192b0ac56b50d3f301fadf85185a",
+    "semantic_hash": "a156192b0ac56b50d3f301fadf85185a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/topbar.d.ts": {
+    "mtime": 1779304388.0279279,
+    "ast_hash": "9178a5a6501a8427dec9a4e7223f4041",
+    "semantic_hash": "9178a5a6501a8427dec9a4e7223f4041"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/topbar.js": {
+    "mtime": 1779304388.0276165,
+    "ast_hash": "2f2ca8fe4bc2f979b368db76955dec4a",
+    "semantic_hash": "2f2ca8fe4bc2f979b368db76955dec4a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/components/layout/topbar.ts": {
+    "mtime": 1779499360.9517286,
+    "ast_hash": "650911b6f23d70d193aff454bfb3e5c7",
+    "semantic_hash": "650911b6f23d70d193aff454bfb3e5c7"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/api.ts": {
+    "mtime": 1779207396.648052,
+    "ast_hash": "6b8e3e40c1276e5741ad7cb078adfa5a",
+    "semantic_hash": "6b8e3e40c1276e5741ad7cb078adfa5a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/search.ts": {
+    "mtime": 1779207882.8696597,
+    "ast_hash": "93a1b402cd0e3c8e30af94d867dfa7c8",
+    "semantic_hash": "93a1b402cd0e3c8e30af94d867dfa7c8"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/api.d.ts": {
+    "mtime": 1779304388.030549,
+    "ast_hash": "300da9e41bdf417c8745e5676e94664d",
+    "semantic_hash": "300da9e41bdf417c8745e5676e94664d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/api.js": {
+    "mtime": 1779304388.0303202,
+    "ast_hash": "c3fda99e3ac61d727c7d0176c34abc28",
+    "semantic_hash": "c3fda99e3ac61d727c7d0176c34abc28"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/search.d.ts": {
+    "mtime": 1779304388.0315092,
+    "ast_hash": "b7fb5dcb119bee849e243399e36078dd",
+    "semantic_hash": "b7fb5dcb119bee849e243399e36078dd"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/search.js": {
+    "mtime": 1779304388.0312297,
+    "ast_hash": "393715edc21a1d07705e308efa4edb6c",
+    "semantic_hash": "393715edc21a1d07705e308efa4edb6c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/services/recent-updates.ts": {
+    "mtime": 1779663644.0685773,
+    "ast_hash": "12dff77b156f3d878c1295dec7b6c83c",
+    "semantic_hash": "12dff77b156f3d878c1295dec7b6c83c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/shared.ts": {
+    "mtime": 1779207896.147333,
+    "ast_hash": "c71274e4df511101fe070f6e13995b0b",
+    "semantic_hash": "c71274e4df511101fe070f6e13995b0b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/home.ts": {
+    "mtime": 1779650158.1362972,
+    "ast_hash": "ddd94ad36364c9e43f7411127f970f4b",
+    "semantic_hash": "ddd94ad36364c9e43f7411127f970f4b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/library.ts": {
+    "mtime": 1779499403.6950407,
+    "ast_hash": "ea12995aa2e97e39aa6107a7422f3fff",
+    "semantic_hash": "ea12995aa2e97e39aa6107a7422f3fff"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/home.d.ts": {
+    "mtime": 1779304388.0328183,
+    "ast_hash": "8d52e00ae3e8539cfea3e826cceffe11",
+    "semantic_hash": "8d52e00ae3e8539cfea3e826cceffe11"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/home.js": {
+    "mtime": 1779304388.0328183,
+    "ast_hash": "93dbd154cb544d873fe5de1ca7ec4da8",
+    "semantic_hash": "93dbd154cb544d873fe5de1ca7ec4da8"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/library.d.ts": {
+    "mtime": 1779304388.0339468,
+    "ast_hash": "c8704c2be59f9a1fcb71b38bc529a982",
+    "semantic_hash": "c8704c2be59f9a1fcb71b38bc529a982"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/library.js": {
+    "mtime": 1779304388.0339468,
+    "ast_hash": "57012c8301124453cc7e97b5b0b6c42d",
+    "semantic_hash": "57012c8301124453cc7e97b5b0b6c42d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/shared.d.ts": {
+    "mtime": 1779304388.0323536,
+    "ast_hash": "533361b4d07b2c305265b6fa8accfcd3",
+    "semantic_hash": "533361b4d07b2c305265b6fa8accfcd3"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/src/UI/Web/views/shared.js": {
+    "mtime": 1779304388.0320766,
+    "ast_hash": "e4f7047f83970ef41469b3165d99dc85",
+    "semantic_hash": "e4f7047f83970ef41469b3165d99dc85"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/docker-compose.yml": {
+    "mtime": 1779755191.6472023,
+    "ast_hash": "63ce1c1a1dbd9829fd7228c0ffdd44b6",
+    "semantic_hash": "63ce1c1a1dbd9829fd7228c0ffdd44b6"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/README.md": {
+    "mtime": 1779137836.8557231,
+    "ast_hash": "d08ce47a144e3648528d503faf34a957",
+    "semantic_hash": "d08ce47a144e3648528d503faf34a957"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/SESSAO_LOG.md": {
+    "mtime": 1779752848.9131281,
+    "ast_hash": "73082761d22a40d3c89d69cb6c47d208",
+    "semantic_hash": "73082761d22a40d3c89d69cb6c47d208"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/docs/ARCHITECTURE.md": {
+    "mtime": 1779137836.8561063,
+    "ast_hash": "39dc7663eb73971b3c254d76770dff28",
+    "semantic_hash": "39dc7663eb73971b3c254d76770dff28"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/public/index.html": {
+    "mtime": 1779650844.8107245,
+    "ast_hash": "6509e27b0647cb65851f3fc8e58e5754",
+    "semantic_hash": "6509e27b0647cb65851f3fc8e58e5754"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:R0FDSElBS1VUQQ.webp": {
+    "mtime": 1779165515.2508433,
+    "ast_hash": "1466dc398765d20c372f3c072963646b",
+    "semantic_hash": "1466dc398765d20c372f3c072963646b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:QkVSU0VSSw.webp": {
+    "mtime": 1779165515.2548432,
+    "ast_hash": "f45221e00958c9f8b36f2f3ff2ff925d",
+    "semantic_hash": "f45221e00958c9f8b36f2f3ff2ff925d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manwha:U09MTyBMRVZFTElORyAtIFJBR05BUk9L.webp": {
+    "mtime": 1779165515.256843,
+    "ast_hash": "a541021c4c97d6f521d781faca26d4cd",
+    "semantic_hash": "a541021c4c97d6f521d781faca26d4cd"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:T05FIFBJRUNF.webp": {
+    "mtime": 1779165515.2588432,
+    "ast_hash": "9c9f459688143f5e09a89c2ff2195750",
+    "semantic_hash": "9c9f459688143f5e09a89c2ff2195750"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:SlVKVVRTVSBLQUlTRU4gTU9EVUxP.webp": {
+    "mtime": 1779165515.2888427,
+    "ast_hash": "3b1d9acac35ed2d25233a51222a4e922",
+    "semantic_hash": "3b1d9acac35ed2d25233a51222a4e922"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:T05FIFBVTkNILU1BTg.webp": {
+    "mtime": 1779165515.2918425,
+    "ast_hash": "b0f2f69cd1173626107c9d8ce2dcb2b9",
+    "semantic_hash": "b0f2f69cd1173626107c9d8ce2dcb2b9"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:VkFHQUJPTkQ.webp": {
+    "mtime": 1779165515.3018425,
+    "ast_hash": "b3f2a1487c3ee22948b95ac0a071b5bc",
+    "semantic_hash": "b3f2a1487c3ee22948b95ac0a071b5bc"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/mangas:SFVOVEVSIHggSFVOVEVS.webp": {
+    "mtime": 1779165515.3058422,
+    "ast_hash": "4cbef2c8e2d3fbf97dd2e41f5325d000",
+    "semantic_hash": "4cbef2c8e2d3fbf97dd2e41f5325d000"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manwha:UkVWRU5HRSBPRiBUSEUgQkFTS0VSVklMTEUgQkxPT0RIT1VORA.webp": {
+    "mtime": 1779165515.317842,
+    "ast_hash": "eab9b99b9b2f5538e23a5f84c84dd029",
+    "semantic_hash": "eab9b99b9b2f5538e23a5f84c84dd029"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manwha:Q09MT1JJU1Q.webp": {
+    "mtime": 1779165515.321842,
+    "ast_hash": "8e9654ffc5dee4f3831c9cfb003e4d39",
+    "semantic_hash": "8e9654ffc5dee4f3831c9cfb003e4d39"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manwha:VEhFIEJFR0lOTklORyBBRlRFUiBUSEUgRU5E.webp": {
+    "mtime": 1779165515.3318417,
+    "ast_hash": "7345f1a14454b57427deb5c01618c955",
+    "semantic_hash": "7345f1a14454b57427deb5c01618c955"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manwha:VEhFIFNURUxMQVIgU1dPUkRNQVNURVI.webp": {
+    "mtime": 1779165515.3388417,
+    "ast_hash": "d29c6fc9f44c597ae066527ffab768b6",
+    "semantic_hash": "d29c6fc9f44c597ae066527ffab768b6"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/cofre:SEFJVEFUU1VTQUtJIE5PIE9ORUVTQU4gR0EgS09XQVNVR0lSVSBIQU5BU0hJ.webp": {
+    "mtime": 1779176570.854476,
+    "ast_hash": "570e928f6f6e7bae04fbc7fab0ca4d41",
+    "semantic_hash": "570e928f6f6e7bae04fbc7fab0ca4d41"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/cofre:UkVJTkNBUk5BVElPTiBDT0xJU0VVTV8gVEhFIFdFQUtFU1QgU0tJTEwgQ09OUVVFUlMgVEhFIFNUUk9OR0VTVCBXT01FTiBBTkQgQ1JFQVRFUyBBIEhBUkVN.webp": {
+    "mtime": 1779176570.8594759,
+    "ast_hash": "cfd0ab4d319101913377d595dae3eef1",
+    "semantic_hash": "cfd0ab4d319101913377d595dae3eef1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manhwas:UkVWRU5HRSBPRiBUSEUgQkFTS0VSVklMTEUgQkxPT0RIT1VORA.webp": {
+    "mtime": 1779178029.973786,
+    "ast_hash": "eab9b99b9b2f5538e23a5f84c84dd029",
+    "semantic_hash": "eab9b99b9b2f5538e23a5f84c84dd029"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manhwas:VEhFIEJFR0lOTklORyBBRlRFUiBUSEUgRU5E.webp": {
+    "mtime": 1779178029.974786,
+    "ast_hash": "7345f1a14454b57427deb5c01618c955",
+    "semantic_hash": "7345f1a14454b57427deb5c01618c955"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manhwas:Q09MT1JJU1Q.webp": {
+    "mtime": 1779178029.980786,
+    "ast_hash": "8e9654ffc5dee4f3831c9cfb003e4d39",
+    "semantic_hash": "8e9654ffc5dee4f3831c9cfb003e4d39"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manhwas:U09MTyBMRVZFTElORyAtIFJBR05BUk9L.webp": {
+    "mtime": 1779178029.9877858,
+    "ast_hash": "a541021c4c97d6f521d781faca26d4cd",
+    "semantic_hash": "a541021c4c97d6f521d781faca26d4cd"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/data/cache/covers/manhwas:VEhFIFNURUxMQVIgU1dPUkRNQVNURVI.webp": {
+    "mtime": 1779178030.0077856,
+    "ast_hash": "d29c6fc9f44c597ae066527ffab768b6",
+    "semantic_hash": "d29c6fc9f44c597ae066527ffab768b6"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "8e740fcc17934ee0930130f0af301856",
+    "semantic_hash": "8e740fcc17934ee0930130f0af301856"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_128x128.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "13d0f61d0f83515ec57bd65e17593f71",
+    "semantic_hash": "13d0f61d0f83515ec57bd65e17593f71"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_16x16.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "39e03ee17e120e3e0c2c158b89963b14",
+    "semantic_hash": "39e03ee17e120e3e0c2c158b89963b14"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_256x256.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "6dd357869951046ad26d5c6b10703e66",
+    "semantic_hash": "6dd357869951046ad26d5c6b10703e66"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_32x32.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "b40c60cae9b63c33c54912359e6e07e4",
+    "semantic_hash": "b40c60cae9b63c33c54912359e6e07e4"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_512x512.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "054abfaf2f7d5d42f6d2fb7531a83c4e",
+    "semantic_hash": "054abfaf2f7d5d42f6d2fb7531a83c4e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/book/book_64x64.png": {
+    "mtime": 1779137836.8569152,
+    "ast_hash": "55539bfe27be30f8b2e5937bc5d8d916",
+    "semantic_hash": "55539bfe27be30f8b2e5937bc5d8d916"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "e9e6fabfe3c9cc2ec7407cae3b117756",
+    "semantic_hash": "e9e6fabfe3c9cc2ec7407cae3b117756"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_128x128.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "419e60d695183e6d27beb241d8e47280",
+    "semantic_hash": "419e60d695183e6d27beb241d8e47280"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_16x16.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "25889f7229cd4c3613421773a3bb8636",
+    "semantic_hash": "25889f7229cd4c3613421773a3bb8636"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_256x256.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "e7711ca9da7dc4f5f700db6a571af328",
+    "semantic_hash": "e7711ca9da7dc4f5f700db6a571af328"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_32x32.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "9efe7468c9a25447fcfdcd9b46f5a44f",
+    "semantic_hash": "9efe7468c9a25447fcfdcd9b46f5a44f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_512x512.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "0eb422e63a0b3d47260b2b03fe55068e",
+    "semantic_hash": "0eb422e63a0b3d47260b2b03fe55068e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/home/home_64x64.png": {
+    "mtime": 1779137836.857122,
+    "ast_hash": "b29918161fb94fe0c07828908c4b8cff",
+    "semantic_hash": "b29918161fb94fe0c07828908c4b8cff"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "5d701fad4504916614c82455f4d18a0d",
+    "semantic_hash": "5d701fad4504916614c82455f4d18a0d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_128x128.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "66a7fa7906bac79425cca142558097d9",
+    "semantic_hash": "66a7fa7906bac79425cca142558097d9"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_16x16.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "33297148d5a1f5f4735351d1fe0e4581",
+    "semantic_hash": "33297148d5a1f5f4735351d1fe0e4581"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_256x256.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "42bca0e9a3d1d1d3180add25276d1f04",
+    "semantic_hash": "42bca0e9a3d1d1d3180add25276d1f04"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_32x32.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "f1854d63ec3dfa955eb7a8cd9025a4d7",
+    "semantic_hash": "f1854d63ec3dfa955eb7a8cd9025a4d7"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_512x512.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "ba18ea9db836b1591b35b1f736322d0f",
+    "semantic_hash": "ba18ea9db836b1591b35b1f736322d0f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/list/list_64x64.png": {
+    "mtime": 1779137836.857324,
+    "ast_hash": "ce6665035411da20fbb612eea4e780d9",
+    "semantic_hash": "ce6665035411da20fbb612eea4e780d9"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "e782ab6a6075ef9c3dbeca0589e70323",
+    "semantic_hash": "e782ab6a6075ef9c3dbeca0589e70323"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_128x128.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "18284659255c792210ad008408378c8a",
+    "semantic_hash": "18284659255c792210ad008408378c8a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_16x16.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "a6ae30b8b2fbe32ef92d1518772d4bff",
+    "semantic_hash": "a6ae30b8b2fbe32ef92d1518772d4bff"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_256x256.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "e0b1df6fa8af4873903f99a0130432ec",
+    "semantic_hash": "e0b1df6fa8af4873903f99a0130432ec"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_32x32.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "b4345920bcdb35be5c6135351f42b1c0",
+    "semantic_hash": "b4345920bcdb35be5c6135351f42b1c0"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_512x512.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "6218deb813c151c81f5958d760257c4f",
+    "semantic_hash": "6218deb813c151c81f5958d760257c4f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_closed/lock_closed_64x64.png": {
+    "mtime": 1779137836.8575168,
+    "ast_hash": "444ba91820c822e0a30b10f023ce9e59",
+    "semantic_hash": "444ba91820c822e0a30b10f023ce9e59"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "52608decbffa266ab35b2639c9c5019f",
+    "semantic_hash": "52608decbffa266ab35b2639c9c5019f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_128x128.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "20b946b0a935b292402955600ab5026e",
+    "semantic_hash": "20b946b0a935b292402955600ab5026e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_16x16.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "13065084823a5713c001545bf5ba200a",
+    "semantic_hash": "13065084823a5713c001545bf5ba200a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_256x256.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "5e11a2950e452ac7c6efa3fb5d41631a",
+    "semantic_hash": "5e11a2950e452ac7c6efa3fb5d41631a"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_32x32.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "4a2363756a822b6d223673e53ba0925d",
+    "semantic_hash": "4a2363756a822b6d223673e53ba0925d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_512x512.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "294e3deb45c024a56c9168402eb5652e",
+    "semantic_hash": "294e3deb45c024a56c9168402eb5652e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/lock_open/lock_open_64x64.png": {
+    "mtime": 1779137836.857726,
+    "ast_hash": "a700fd2b138fcae8ac1484b75b9f219d",
+    "semantic_hash": "a700fd2b138fcae8ac1484b75b9f219d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "609264fc2dedf23b283e27b75a08736c",
+    "semantic_hash": "609264fc2dedf23b283e27b75a08736c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_128x128.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "7e5c6be413f117e183ea27e3e36ff462",
+    "semantic_hash": "7e5c6be413f117e183ea27e3e36ff462"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_16x16.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "c7612ae1269dda7d6568ccc59ce4ad97",
+    "semantic_hash": "c7612ae1269dda7d6568ccc59ce4ad97"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_256x256.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "7d4c3790466da111a00a79bd4ceff4ad",
+    "semantic_hash": "7d4c3790466da111a00a79bd4ceff4ad"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_32x32.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "55890a68e82e173a268f822019fac5fc",
+    "semantic_hash": "55890a68e82e173a268f822019fac5fc"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_512x512.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "5fd8586ea2f27c6a41a8d80eb9c76992",
+    "semantic_hash": "5fd8586ea2f27c6a41a8d80eb9c76992"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/markbook/markbook_64x64.png": {
+    "mtime": 1779137836.8579147,
+    "ast_hash": "1f9a188fddf3511c97e7fe0c5aeba318",
+    "semantic_hash": "1f9a188fddf3511c97e7fe0c5aeba318"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "705ea2a64da9aefa2cd2b30695626272",
+    "semantic_hash": "705ea2a64da9aefa2cd2b30695626272"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_128x128.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "d83165de29c6e43e9b77159783616970",
+    "semantic_hash": "d83165de29c6e43e9b77159783616970"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_16x16.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "f686c2a317ebc80ca50b0486a47ec57f",
+    "semantic_hash": "f686c2a317ebc80ca50b0486a47ec57f"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_256x256.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "e233d129e9fe003bc65a7910410e1019",
+    "semantic_hash": "e233d129e9fe003bc65a7910410e1019"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_32x32.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "0ab96772eb8c7516149ecb74f419c438",
+    "semantic_hash": "0ab96772eb8c7516149ecb74f419c438"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_512x512.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "1fc842a0810237577bcebb83a94a00ca",
+    "semantic_hash": "1fc842a0810237577bcebb83a94a00ca"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/medal/medal_64x64.png": {
+    "mtime": 1779137836.8581154,
+    "ast_hash": "805e144ea5a018f4c660e2d2bfb5dae7",
+    "semantic_hash": "805e144ea5a018f4c660e2d2bfb5dae7"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "47d9789ff1b398576c3f61ac468e38a1",
+    "semantic_hash": "47d9789ff1b398576c3f61ac468e38a1"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_128x128.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "4d20441ad4ad33db85e39bbf831d633c",
+    "semantic_hash": "4d20441ad4ad33db85e39bbf831d633c"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_16x16.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "d047f91f79362fed27d339ad5294b316",
+    "semantic_hash": "d047f91f79362fed27d339ad5294b316"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_256x256.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "034bc4e79eb4adb841e09e422e0494ce",
+    "semantic_hash": "034bc4e79eb4adb841e09e422e0494ce"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_32x32.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "5928f6eaf4af8bffc15b1e4a1d5f94ef",
+    "semantic_hash": "5928f6eaf4af8bffc15b1e4a1d5f94ef"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_512x512.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "fcdd4fa271dc780a7c5f4ff1ce6d3899",
+    "semantic_hash": "fcdd4fa271dc780a7c5f4ff1ce6d3899"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/pencil/pencil_64x64.png": {
+    "mtime": 1779137836.858322,
+    "ast_hash": "d2ccc40349ab5b8d1930e23829d8a6da",
+    "semantic_hash": "d2ccc40349ab5b8d1930e23829d8a6da"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "ef321be444515c4b8dc4b87440f0a4d4",
+    "semantic_hash": "ef321be444515c4b8dc4b87440f0a4d4"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_128x128.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "6d85b0d53a469d596bb9d4b8309cc2ab",
+    "semantic_hash": "6d85b0d53a469d596bb9d4b8309cc2ab"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_16x16.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "63060cdc0bf6f3bb51a61973ccdcb5e8",
+    "semantic_hash": "63060cdc0bf6f3bb51a61973ccdcb5e8"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_256x256.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "967cabe6d9f8e485c5ce02980c93c13b",
+    "semantic_hash": "967cabe6d9f8e485c5ce02980c93c13b"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_32x32.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "d3e50518c3a8b7f8e623a32ab7306c94",
+    "semantic_hash": "d3e50518c3a8b7f8e623a32ab7306c94"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_512x512.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "00593779e47d8ae8b3cafb68c335019d",
+    "semantic_hash": "00593779e47d8ae8b3cafb68c335019d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/star/star_64x64.png": {
+    "mtime": 1779137836.8585029,
+    "ast_hash": "31a5addb7b5ef668f027075d34af64cd",
+    "semantic_hash": "31a5addb7b5ef668f027075d34af64cd"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "9d885423f9fd1ca1a92ce8e836768ea2",
+    "semantic_hash": "9d885423f9fd1ca1a92ce8e836768ea2"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_128x128.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "d84f98480890146ab2316f89876f1daa",
+    "semantic_hash": "d84f98480890146ab2316f89876f1daa"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_16x16.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "257fa9d55c63b841eb97e08132f6f5d6",
+    "semantic_hash": "257fa9d55c63b841eb97e08132f6f5d6"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_256x256.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "520c84338906a99d57e34360c0fa32bd",
+    "semantic_hash": "520c84338906a99d57e34360c0fa32bd"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_32x32.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "0cc2224176a77663a93f92732b490784",
+    "semantic_hash": "0cc2224176a77663a93f92732b490784"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_512x512.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "45502eedf7cef603c27e9172e8a5125d",
+    "semantic_hash": "45502eedf7cef603c27e9172e8a5125d"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/trash/trash_64x64.png": {
+    "mtime": 1779137836.8587608,
+    "ast_hash": "caa302244fdab3f87e5adb3fa3ddef34",
+    "semantic_hash": "caa302244fdab3f87e5adb3fa3ddef34"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "3d6e0811e2f5e24a61fdb05be2793d60",
+    "semantic_hash": "3d6e0811e2f5e24a61fdb05be2793d60"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_128x128.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "1104fbdda1953626114ad142f69905e8",
+    "semantic_hash": "1104fbdda1953626114ad142f69905e8"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_16x16.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "f7f755ad758664b0ecf9dcec765ca863",
+    "semantic_hash": "f7f755ad758664b0ecf9dcec765ca863"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_256x256.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "206b44362bf90c69188bdcd5f71301ea",
+    "semantic_hash": "206b44362bf90c69188bdcd5f71301ea"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_32x32.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "52557620d33d01bbb6ebb04dd61dd48e",
+    "semantic_hash": "52557620d33d01bbb6ebb04dd61dd48e"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_512x512.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "d92c66f77b7625c0ad8a45241c66ebb3",
+    "semantic_hash": "d92c66f77b7625c0ad8a45241c66ebb3"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/icons/users/users_64x64.png": {
+    "mtime": 1779137836.8590326,
+    "ast_hash": "5de1494a36a85a421e192e9e3b7877a7",
+    "semantic_hash": "5de1494a36a85a421e192e9e3b7877a7"
+  },
+  "/home/sekiro/Codex/Pugotilabs/Pugotiread/public/phosphor-sprite.svg": {
+    "mtime": 1779499443.0474072,
+    "ast_hash": "0fc8e74791ec13d7d0ce46d261ea0055",
+    "semantic_hash": "0fc8e74791ec13d7d0ce46d261ea0055"
   }
 }

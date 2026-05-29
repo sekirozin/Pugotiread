@@ -28,6 +28,12 @@ let vaultTouchInFlight = false;
 let libraryLoadRequestId = 0;
 let passwordResetTokenPath = "";
 
+const libraryOnlyKinds = new Set<LibraryKind>(["book", "lightNovel"]);
+
+function getGloballyListedLibraries(libraries: Library[]): Library[] {
+  return libraries.filter((library) => !libraryOnlyKinds.has(library.kind));
+}
+
 declare global {
   interface Window {
     google?: GoogleAccounts;
@@ -46,12 +52,12 @@ const app = appElement;
 
 function renderReaderModeIcon(): string {
   if (!state.reader) {
-    return "↕";
+    return renderIcon("readerVertical");
   }
   if (state.reader.mode === "horizontal") {
-    return "↔";
+    return renderIcon("readerHorizontal");
   }
-  return "↕";
+  return renderIcon("readerVertical");
 }
 
 function isReaderFullscreen(): boolean {
@@ -63,7 +69,7 @@ function isMobileViewport(): boolean {
 }
 
 function renderReaderFullscreenIcon(): string {
-  return isReaderFullscreen() ? "⤢" : "⛶";
+  return renderIcon(isReaderFullscreen() ? "fullscreenExit" : "fullscreen");
 }
 
 function getReaderFullscreenLabel(): string {
@@ -158,24 +164,41 @@ async function mountGoogleButton(
 
 function closeFloatingMenusFromOutside(target: EventTarget | null): void {
   const element = target instanceof HTMLElement ? target : null;
-  if (element && !element.closest(".stats-menu-shell") && state.statsMenuOpen) {
+  let changed = false;
+
+  if (state.statsMenuOpen && (!element || !element.closest(".stats-menu-shell"))) {
     state.statsMenuOpen = false;
+    changed = true;
+  }
+
+  if (state.accountMenuOpen && (!element || !element.closest(".account-menu-shell"))) {
+    state.accountMenuOpen = false;
+    changed = true;
+  }
+
+  if (state.openLibraryMenuId && (!element || !element.closest("[data-library-menu-id], .library-context-menu"))) {
+    state.openLibraryMenuId = null;
+    changed = true;
+  }
+
+  if (state.vaultMenuOpen && (!element || !element.closest("[data-vault-menu], .library-context-menu"))) {
+    state.vaultMenuOpen = false;
+    changed = true;
+  }
+
+  if (
+    (state.openSeriesMenuId || state.openSeriesAddMenuId || state.openSeriesRemoveMenuId) &&
+    (!element || !element.closest("[data-series-menu-key], .series-context-menu, .series-add-menu, .series-remove-menu"))
+  ) {
+    state.openSeriesMenuId = null;
+    state.openSeriesAddMenuId = null;
+    state.openSeriesRemoveMenuId = null;
+    changed = true;
+  }
+
+  if (changed) {
     renderShell();
-    return;
   }
-
-  if (!element || element.closest("[data-series-menu-key], .series-context-menu, .series-add-menu, .series-remove-menu")) {
-    return;
-  }
-
-  if (!state.openSeriesMenuId && !state.openSeriesAddMenuId && !state.openSeriesRemoveMenuId) {
-    return;
-  }
-
-  state.openSeriesMenuId = null;
-  state.openSeriesAddMenuId = null;
-  state.openSeriesRemoveMenuId = null;
-  renderShell();
 }
 
 function closeNavigationPanels(): void {
@@ -344,8 +367,11 @@ async function loadHome(): Promise<void> {
     const { settings } = settingsPayload as { settings: ServerSettings };
     state.vaultTimeoutMinutes = settings.vaultTimeoutMinutes;
     state.vaultSettingsDraft = String(settings.vaultTimeoutMinutes);
+    state.readingSettingsDraft = settings.readingDefaults;
   }
-  state.homeContents = await loadLibraryContents(libraries);
+  const visibleLibraries = state.libraries;
+  state.homeContents = await loadLibraryContents(getGloballyListedLibraries(visibleLibraries));
+  state.readingNowContents = await loadLibraryContents(visibleLibraries);
   state.activeLibraryId = null;
   state.activeSeriesId = null;
   state.activeView = "home";
@@ -831,6 +857,7 @@ function renderShell(): void {
 
   if (state.reader) {
     renderReaderOverlay();
+    bindReaderEpubFrames();
   }
 }
 
@@ -871,7 +898,7 @@ function renderMainView(activeLibrary: Library | undefined, contents: ContentIte
   }
 
   if (state.activeView === "want") {
-    return renderContentListView("Quero ler", "Obras salvas para ler depois.", getContentsByIds(state.wantToRead));
+    return renderReadingNowView();
   }
 
   if (state.activeView === "lists") {
@@ -896,7 +923,7 @@ function renderMainView(activeLibrary: Library | undefined, contents: ContentIte
 
   const labels: Record<AppState["activeView"], string> = {
     home: "Início",
-    want: "Quero ler",
+    want: "Lendo agora",
     collections: "Coleções",
     lists: "Listas de leitura",
     bookmarks: "Marcadores",
@@ -909,6 +936,21 @@ function renderMainView(activeLibrary: Library | undefined, contents: ContentIte
   };
 
   return renderPlaceholderView(labels[state.activeView], "Esta área está reservada para a próxima etapa da interface.");
+}
+
+function renderReadingNowView(): string {
+  const readingNowContents = getReadingNowContents();
+  const publicContentIds = new Set(readingNowContents.map((content) => content.id));
+  const contentIds = state.progress
+    .filter((progress) => publicContentIds.has(progress.contentId))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .map((progress) => progress.contentId);
+
+  return renderContentListView(
+    "Lendo agora",
+    "Obras com progresso salvo, ordenadas pela última leitura.",
+    getContentsByIdsFrom(readingNowContents, contentIds)
+  );
 }
 
 function renderSettingsView(): string {
@@ -1220,7 +1262,13 @@ function updateProfileFavoriteResults(): void {
 function getSettingsSectionTitle(): string {
   const titles: Record<AppState["settingsSection"], string> = {
     account: "Conta",
-    server: state.serverSection === "users" ? "Usuários" : state.serverSection === "vault" ? "Cofre pessoal" : "Bibliotecas"
+    server: state.serverSection === "users"
+      ? "Usuários"
+      : state.serverSection === "vault"
+        ? "Cofre pessoal"
+        : state.serverSection === "reading"
+          ? "Modo de leitura"
+          : "Bibliotecas"
   };
 
   return titles[state.settingsSection];
@@ -1233,6 +1281,7 @@ function renderSettingsSection(): string {
     }
     if (state.serverSection === "users") return renderUsersSettings();
     if (state.serverSection === "vault") return renderVaultSettings();
+    if (state.serverSection === "reading") return renderReadingModeSettings();
     return renderLibrariesSettings();
   }
 
@@ -1298,6 +1347,55 @@ function renderVaultSettings(): string {
         <button class="button" type="submit">Salvar configuração</button>
       </div>
     </form>
+  `;
+}
+
+function renderReadingModeSettings(): string {
+  const kinds: LibraryKind[] = ["manga", "manhwa", "comic", "book", "lightNovel", "other"];
+  return `
+    <form class="settings-panel reading-settings-form" id="reading-settings-form">
+      <p class="settings-lead">Defina como o leitor abre por padrão em cada tipo de biblioteca.</p>
+      <div class="library-settings-list">
+        ${kinds.map((kind) => renderReadingDefaultsRow(kind)).join("")}
+      </div>
+      ${state.readingSettingsError ? `<p class="error">${escapeHtml(state.readingSettingsError)}</p>` : ""}
+      ${state.readingSettingsMessage ? `<p class="scan-message">${escapeHtml(state.readingSettingsMessage)}</p>` : ""}
+      <div class="settings-actions">
+        <button class="button" type="submit">Salvar configuração</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderReadingDefaultsRow(kind: LibraryKind): string {
+  const defaults = state.readingSettingsDraft[kind];
+  return `
+    <article class="library-settings-row reading-settings-row">
+      <div class="library-settings-row-info">
+        <strong>${escapeHtml(getLibraryKindLabel(kind))}</strong>
+        <p>Controles usados ao abrir obras desta biblioteca.</p>
+      </div>
+      <label class="compact-field">
+        <span>Modo</span>
+        <select class="input" name="${kind}.mode">
+          <option value="horizontal" ${defaults.mode === "horizontal" ? "selected" : ""}>Horizontal</option>
+          <option value="paged-vertical" ${defaults.mode === "paged-vertical" ? "selected" : ""}>Vertical paginado</option>
+          <option value="vertical-scroll" ${defaults.mode === "vertical-scroll" ? "selected" : ""}>Scroll vertical</option>
+        </select>
+      </label>
+      <label class="compact-field">
+        <span>Ajuste</span>
+        <select class="input" name="${kind}.fitting">
+          <option value="height" ${defaults.fitting === "height" ? "selected" : ""}>Altura</option>
+          <option value="width" ${defaults.fitting === "width" ? "selected" : ""}>Largura</option>
+          <option value="original" ${defaults.fitting === "original" ? "selected" : ""}>Original</option>
+        </select>
+      </label>
+      <label class="toggle-field">
+        <input type="checkbox" name="${kind}.controlsVisible" ${defaults.controlsVisible ? "checked" : ""} />
+        <span>Controles visíveis</span>
+      </label>
+    </article>
   `;
 }
 
@@ -1441,6 +1539,9 @@ function renderLibraryModalStep(): string {
         <option value="manga" ${state.libraryDraft.kind === "manga" ? "selected" : ""}>Mangás</option>
         <option value="book" ${state.libraryDraft.kind === "book" ? "selected" : ""}>Livros</option>
         <option value="manhwa" ${state.libraryDraft.kind === "manhwa" ? "selected" : ""}>Manhwas</option>
+        <option value="comic" ${state.libraryDraft.kind === "comic" ? "selected" : ""}>Quadrinhos</option>
+        <option value="lightNovel" ${state.libraryDraft.kind === "lightNovel" ? "selected" : ""}>Light Novels</option>
+        <option value="other" ${state.libraryDraft.kind === "other" ? "selected" : ""}>Outros</option>
       </select>
     </label>
     <p class="modal-help">${state.libraryDraft.isPersonal ? "Esta biblioteca ficará oculta fora do cofre pessoal." : "Escolha o nome e o tipo da biblioteca. A pasta real será selecionada na próxima etapa."}</p>
@@ -1479,6 +1580,8 @@ function getLibraryKindLabel(kind: LibraryKind): string {
     manga: "Mangás",
     book: "Livros",
     manhwa: "Manhwas",
+    comic: "Quadrinhos",
+    lightNovel: "Light Novels",
     other: "Outros"
   };
 
@@ -2120,7 +2223,8 @@ function canMoveLibraryStep(nextStep: AppState["libraryModalStep"]): boolean {
 async function refreshLibraries(): Promise<void> {
   const { libraries } = await api<{ libraries: Library[] }>("/api/libraries");
   state.libraries = libraries;
-  state.homeContents = await loadLibraryContents(libraries);
+  state.homeContents = await loadLibraryContents(getGloballyListedLibraries(libraries));
+  state.readingNowContents = await loadLibraryContents(libraries);
 }
 
 async function refreshPersonalVault(): Promise<void> {
@@ -2164,6 +2268,7 @@ async function deletePublicLibrary(libraryId: string): Promise<void> {
     await api<void>(`/api/libraries/${encodeURIComponent(libraryId)}`, { method: "DELETE" });
     state.libraries = state.libraries.filter((item) => item.id !== libraryId);
     state.homeContents = state.homeContents.filter((content) => content.libraryId !== libraryId);
+    state.readingNowContents = state.readingNowContents.filter((content) => content.libraryId !== libraryId);
     if (state.activeLibraryId === libraryId) {
       state.activeLibraryId = null;
       state.activeSeriesId = null;
@@ -2313,6 +2418,41 @@ async function saveVaultSettings(form: HTMLFormElement): Promise<void> {
   } catch (error) {
     state.vaultSettingsError = error instanceof Error ? error.message : "Não foi possível salvar a configuração.";
     state.vaultSettingsMessage = "";
+    renderShell();
+  }
+}
+
+function readReadingDefaultsForm(form: HTMLFormElement): ServerSettings["readingDefaults"] {
+  const formData = new FormData(form);
+  const kinds: LibraryKind[] = ["manga", "manhwa", "book", "comic", "lightNovel", "other"];
+  return Object.fromEntries(kinds.map((kind) => {
+    const current = state.readingSettingsDraft[kind];
+    const mode = String(formData.get(`${kind}.mode`) ?? current.mode) as ReaderMode;
+    const fitting = String(formData.get(`${kind}.fitting`) ?? current.fitting) as FittingMode;
+    return [kind, {
+      mode,
+      fitting,
+      controlsVisible: formData.has(`${kind}.controlsVisible`)
+    }];
+  })) as ServerSettings["readingDefaults"];
+}
+
+async function saveReadingModeSettings(form: HTMLFormElement): Promise<void> {
+  const readingDefaults = readReadingDefaultsForm(form);
+  state.readingSettingsDraft = readingDefaults;
+
+  try {
+    const { settings } = await api<{ settings: ServerSettings }>("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ readingDefaults })
+    });
+    state.readingSettingsDraft = settings.readingDefaults;
+    state.readingSettingsError = "";
+    state.readingSettingsMessage = "Configuração salva.";
+    renderShell();
+  } catch (error) {
+    state.readingSettingsError = error instanceof Error ? error.message : "Não foi possível salvar a configuração.";
+    state.readingSettingsMessage = "";
     renderShell();
   }
 }
@@ -2874,9 +3014,7 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
   const marked = state.seriesMarks.includes(content.id);
   const progress = getProgressForContent(content.id);
   const seriesLibrary = state.libraries.find((library) => library.id === content.libraryId) ?? activeLibrary;
-  const continuePage = progress?.currentPage ?? 0;
   const chapterLabel = content.chapterCount === 1 ? "capítulo" : "capítulos";
-  const ratingClass = getRatingClass(content.rating);
   const mainChapters = content.chapters.filter((chapter) => !chapter.isSpecial);
   const specialChapters = content.chapters.filter((chapter) => chapter.isSpecial);
   const progressLabel = getProgressChapterLabel(content, progress);
@@ -2884,9 +3022,13 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
   const reviewCount = activeReviews.length;
   const visibleChapters = state.seriesTab === "specials" ? specialChapters : mainChapters;
   const chapters = getOrderedChapters(visibleChapters, progress);
+  const releaseYear = getReleaseYear(content.releaseDate);
+  const authors = content.authors.length ? content.authors.join(", ") : "N/A";
+  const genres = content.genres.slice(0, 6);
 
   return `
     <section class="series-detail">
+      <button class="series-back-link" data-series-back type="button">${renderIcon("back")} <span>Voltar</span></button>
       <div class="series-detail-hero">
         <div class="series-detail-cover">
           ${
@@ -2896,35 +3038,50 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
           }
         </div>
         <div class="series-detail-info">
-          <div class="series-detail-header">
-            <button class="series-back-button" data-series-back type="button">Voltar</button>
-            <span class="series-library-chip">${escapeHtml(seriesLibrary?.name ?? "Biblioteca")}</span>
+          <div class="series-kicker-row">
+            <span class="series-library-chip">${escapeHtml(getSeriesKindLabel(seriesLibrary?.kind))}</span>
+            <span class="series-status-chip">${progress ? "Em leitura" : "Disponível"}</span>
           </div>
           <h1>${escapeHtml(content.title)}</h1>
-          <div class="series-detail-stats">
-            <span>${content.pageCount} páginas</span>
-            <span>${content.chapterCount} ${chapterLabel}</span>
+          <div class="series-original-title">${escapeHtml(seriesLibrary?.name ?? "Biblioteca")}</div>
+          ${
+            genres.length
+              ? `<div class="series-genre-row">${genres.map((genre) => `<span>${escapeHtml(genre)}</span>`).join("")}</div>`
+              : ""
+          }
+          <div class="series-detail-stats" aria-label="Resumo da obra">
+            <div class="series-stat-card">
+              ${renderSeriesRatingDisplay(content.rating)}
+              <span class="series-stat-note">${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span>
+            </div>
+            <div class="series-stat-card">
+              <span class="series-stat-icon">${renderIcon("bookmarks")}</span>
+              <strong>${content.chapterCount}</strong>
+              <span>${chapterLabel}</span>
+            </div>
+            <div class="series-stat-card">
+              <span class="series-stat-icon">${renderIcon("release")}</span>
+              <strong>${escapeHtml(releaseYear)}</strong>
+              <span>Lançamento</span>
+            </div>
           </div>
           <div class="series-detail-actions">
-            <button class="button secondary${marked ? " active-mark" : ""}" data-series-mark-toggle="${content.id}" type="button">
-              ${marked ? "Desmarcar" : "Marcar"}
+            <button class="series-primary-action" data-series-continue="${content.id}" type="button">
+              ${renderIcon("continue")} ${progress ? "Continuar leitura" : "Ler primeiro"}
             </button>
-            <button class="button" data-series-continue="${content.id}" type="button">
-              Continuar leitura
+            <button class="series-secondary-action${marked ? " active-mark" : ""}" data-series-mark-toggle="${content.id}" type="button">
+              ${renderIcon(marked ? "ratingFilled" : "rating")} ${marked ? "Favoritado" : "Favoritar"}
             </button>
+            <span class="series-secondary-action inert">${renderIcon("progress")} ${escapeHtml(progressLabel)}</span>
           </div>
-          <div class="series-detail-meta-grid">
-            ${renderSeriesMetaItem("Autores", content.authors.length ? content.authors.join(", ") : "N/A", renderIcon("author"))}
-            ${renderSeriesMetaItem("Lançamento", content.releaseDate ?? "N/A", renderIcon("release"))}
-            ${renderSeriesMetaItem("Gêneros", content.genres.length ? content.genres.join(", ") : "N/A", renderIcon("genres"))}
-            ${renderSeriesMetaItem("Progresso", progressLabel, renderIcon("progress"))}
-            ${renderSeriesMetaItem("Nota", content.rating ?? "N/A", renderIcon("rating"), ratingClass)}
+          <div class="series-creator-grid">
+            <div><span>Autor(es):</span> <strong>${escapeHtml(authors)}</strong></div>
+            <div><span>Páginas:</span> <strong>${content.pageCount}</strong></div>
           </div>
-          ${
-            content.description
-              ? `<p class="series-description">${escapeHtml(content.description)}</p>`
-              : `<p class="series-description muted">Sem sinopse disponível para esta obra.</p>`
-          }
+          <section class="series-description-card" aria-label="Sinopse">
+            <h2>Sinopse</h2>
+            <p class="series-description${content.description ? "" : " muted"}">${escapeHtml(content.description ?? "Sem sinopse disponível para esta obra.")}</p>
+          </section>
         </div>
       </div>
       <div class="series-tabs" role="tablist" aria-label="Seções da série">
@@ -2966,6 +3123,39 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
         }
       </div>
     </section>
+  `;
+}
+
+function getSeriesKindLabel(kind: LibraryKind | undefined): string {
+  const labels: Record<LibraryKind, string> = {
+    manga: "Mangá",
+    manhwa: "Manhwa",
+    book: "Livro",
+    comic: "Quadrinho",
+    lightNovel: "Light Novel",
+    other: "Obra"
+  };
+  return kind ? labels[kind] : "Obra";
+}
+
+function getReleaseYear(releaseDate: string | null): string {
+  if (!releaseDate) {
+    return "N/A";
+  }
+  const yearMatch = releaseDate.match(/\d{4}/);
+  return yearMatch?.[0] ?? releaseDate;
+}
+
+function renderSeriesRatingDisplay(rating: string | null): string {
+  const value = rating ? Number.parseFloat(rating) : Number.NaN;
+  const displayValue = Number.isFinite(value) ? value.toFixed(1) : "N/A";
+  const ratingClass = getRatingClass(rating);
+
+  return `
+    <span class="series-rating-display ${ratingClass}">
+      <strong>${escapeHtml(displayValue)}</strong>
+      ${renderIcon("ratingFilled")}
+    </span>
   `;
 }
 
@@ -3106,18 +3296,15 @@ function getOrderedChapters(
 function getRatingClass(rating: string | null): string {
   const value = rating ? Number.parseFloat(rating) : Number.NaN;
   if (Number.isNaN(value)) {
-    return "rating-brown";
+    return "rating-empty";
   }
-  if (value >= 8.5) {
+  if (value >= 8) {
     return "rating-blue";
   }
-  if (value >= 7) {
+  if (value >= 4) {
     return "rating-yellow";
   }
-  if (value >= 5) {
-    return "rating-silver";
-  }
-  return "rating-brown";
+  return "rating-white";
 }
 
 function getReaderModeLabel(mode: ReaderMode): string {
@@ -3131,9 +3318,9 @@ function getReaderModeLabel(mode: ReaderMode): string {
 
 function getReaderModeIconLabel(mode: ReaderMode): string {
   const icons: Record<ReaderMode, string> = {
-    horizontal: "↔",
-    "paged-vertical": "↕",
-    "vertical-scroll": "☰"
+    horizontal: renderIcon("readerHorizontal"),
+    "paged-vertical": renderIcon("readerVertical"),
+    "vertical-scroll": renderIcon("readerVertical")
   };
   return icons[mode];
 }
@@ -3238,23 +3425,24 @@ function getAdjacentChapterStartPage(content: ContentItem, page: number, directi
 
 function renderReaderOverlay(): void {
   if (!state.reader) return;
-  const { content, page, mode, fitting, zoom, brightness, controlsVisible } = state.reader;
+  const { content, page, mode, fitting, zoom, brightness, bookTheme, controlsVisible } = state.reader;
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
   const pageBookmarked = isPageBookmarked(content.id, safePage);
   const chapterProgress = getReaderChapterProgress(content, safePage);
   const modeIcon = getReaderModeIconLabel(mode);
   const modeLabel = getReaderModeLabel(mode);
   const fittingLabel = getFittingLabel(fitting);
+  const isBookReader = content.pageTypes.includes("epub");
 
   const topHtml = `
     <div class="reader-overlay-inner">
-      <button class="reader-btn-icon reader-back-btn" data-reader-action="close" type="button" aria-label="Voltar"><i class="fa-solid fa-arrow-left"></i></button>
+      <button class="reader-btn-icon reader-back-btn" data-reader-action="close" type="button" aria-label="Voltar">${renderIcon("back")}</button>
       <div class="reader-title-group">
         <div class="reader-title-text">${escapeHtml(content.title)}</div>
         <div class="reader-subtitle">${escapeHtml(getChapterForPage(content, safePage)?.name ?? `Página ${safePage + 1}`)} · ${getContentProgressPercent(content, safePage)}%</div>
       </div>
       <div class="reader-overlay-right">
-        <button class="reader-btn-icon" data-reader-action="bookmark" type="button" title="${pageBookmarked ? "Remover marcador" : "Marcar página"}"><i class="${pageBookmarked ? "fa-solid" : "fa-regular"} fa-bookmark"></i></button>
+        <button class="reader-btn-icon" data-reader-action="bookmark" type="button" title="${pageBookmarked ? "Remover marcador" : "Marcar página"}">${renderIcon(pageBookmarked ? "bookmarksFilled" : "bookmarks")}</button>
       </div>
     </div>
   `;
@@ -3262,15 +3450,15 @@ function renderReaderOverlay(): void {
   const bottomHtml = `
     <div class="reader-slider-row">
       <div class="reader-slider-inner">
-        <button class="reader-btn-icon" data-reader-action="chapter-prev" type="button" title="Capítulo anterior" aria-label="Capítulo anterior"><i class="fa-solid fa-fast-backward"></i></button>
-        <button class="reader-btn-icon" data-reader-action="page-first" type="button" title="Primeira página" aria-label="Primeira página"><i class="fa-solid fa-step-backward"></i></button>
+        <button class="reader-btn-icon" data-reader-action="chapter-prev" type="button" title="Capítulo anterior" aria-label="Capítulo anterior">${renderIcon("rewind")}</button>
+        <button class="reader-btn-icon" data-reader-action="page-prev" type="button" title="Página anterior" aria-label="Página anterior">${renderIcon("back")}</button>
         <div class="reader-slider-track">
           <span>${chapterProgress.currentPage}</span>
           <input data-reader-page-slider type="range" min="${chapterProgress.startPage}" max="${Math.max(chapterProgress.endPage, 0)}" value="${safePage}" aria-label="Página" />
           <span>${chapterProgress.pageCount}</span>
         </div>
-        <button class="reader-btn-icon" data-reader-action="page-last" type="button" title="Última página" aria-label="Última página"><i class="fa-solid fa-step-forward"></i></button>
-        <button class="reader-btn-icon" data-reader-action="chapter-next" type="button" title="Próximo capítulo" aria-label="Próximo capítulo"><i class="fa-solid fa-fast-forward"></i></button>
+        <button class="reader-btn-icon reader-next-page-btn" data-reader-action="page-next" type="button" title="Próxima página" aria-label="Próxima página">${renderIcon("back")}</button>
+        <button class="reader-btn-icon" data-reader-action="chapter-next" type="button" title="Próximo capítulo" aria-label="Próximo capítulo">${renderIcon("fastForward")}</button>
       </div>
     </div>
     <div class="reader-action-row">
@@ -3283,20 +3471,26 @@ function renderReaderOverlay(): void {
         <span class="label">Modo</span>
       </button>
       <button class="reader-action-btn" data-reader-action="fullscreen" type="button" title="${escapeHtml(getReaderFullscreenLabel())}">
-        <span class="icon"><i class="fa-solid ${isReaderFullscreen() ? "fa-compress" : "fa-expand"}"></i></span>
+        <span class="icon">${renderIcon(isReaderFullscreen() ? "fullscreenExit" : "fullscreen")}</span>
         <span class="label">Tela cheia</span>
       </button>
       <button class="reader-action-btn" data-reader-action="toggle-direction" type="button" title="Direção de leitura">
-        <span class="icon"><i class="fa-solid fa-arrows-left-right"></i></span>
+        <span class="icon">${renderIcon("direction")}</span>
         <span class="label">Direção</span>
       </button>
+      ${isBookReader ? `
+        <button class="reader-action-btn" data-reader-action="toggle-book-theme" type="button" title="Tema do livro: ${bookTheme === "dark" ? "Escuro" : "Claro"}">
+          <span class="icon">${renderIcon(bookTheme === "dark" ? "moon" : "sun")}</span>
+          <span class="label">Tema</span>
+        </button>
+      ` : ""}
       <div class="reader-zoom-control" aria-label="Zoom">
-        <button class="reader-btn-icon compact" data-reader-action="zoom-out" type="button" title="Diminuir zoom" aria-label="Diminuir zoom">−</button>
+        <button class="reader-btn-icon compact" data-reader-action="zoom-out" type="button" title="Diminuir zoom" aria-label="Diminuir zoom">${renderIcon("minus")}</button>
         <button class="reader-zoom-value" data-reader-action="zoom-reset" type="button" title="Resetar zoom" aria-label="Resetar zoom">${zoom}%</button>
-        <button class="reader-btn-icon compact" data-reader-action="zoom-in" type="button" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
+        <button class="reader-btn-icon compact" data-reader-action="zoom-in" type="button" title="Aumentar zoom" aria-label="Aumentar zoom">${renderIcon("plus")}</button>
       </div>
       <div class="reader-brightness-control">
-        <span><i class="fa-solid fa-sun"></i></span>
+        <span>${renderIcon("sun")}</span>
         <input data-reader-brightness type="range" min="10" max="100" value="${brightness}" aria-label="Brilho" />
       </div>
     </div>
@@ -3324,9 +3518,9 @@ function renderReaderOverlay(): void {
 
 function renderFittingIcon(fitting: FittingMode): string {
   const icons: Record<FittingMode, string> = {
-    height: "↕",
-    width: "↔",
-    original: "⊞"
+    height: renderIcon("fitHeight"),
+    width: renderIcon("fitWidth"),
+    original: renderIcon("fitOriginal")
   };
   return icons[fitting];
 }
@@ -3337,9 +3531,10 @@ function renderReader(content: ContentItem, page: number, mode: ReaderMode): str
   const fitting = state.reader?.fitting ?? "height";
   const zoom = state.reader?.zoom ?? 100;
   const brightness = state.reader?.brightness ?? 100;
+  const bookTheme = state.reader?.bookTheme ?? "light";
   const paginationClass = mode === "paged-vertical" ? "vertical" : "horizontal";
   return `
-    <section class="reader ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%; --reader-zoom-percent: ${zoom}%; --reader-zoom-scale: ${zoom / 100}; --reader-max-width: ${Math.round(980 * (zoom / 100))}px">
+    <section class="reader book-theme-${bookTheme} ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%; --reader-zoom-percent: ${zoom}%; --reader-zoom-scale: ${zoom / 100}; --reader-max-width: ${Math.round(980 * (zoom / 100))}px">
       <div class="reader-pagination ${paginationClass}">
         <button class="zone prev" data-reader-action="page-prev" aria-label="Página anterior"></button>
         <button class="zone next" data-reader-action="page-next" aria-label="Próxima página"></button>
@@ -3393,7 +3588,59 @@ function renderPageMedia(content: ContentItem, page: number, vertical: boolean):
     `;
   }
 
+  if (pageType === "epub") {
+    return `
+      <iframe
+        class="reader-epub ${vertical ? "vertical-page" : ""}"
+        data-reader-page-index="${page}"
+        src="${escapeHtml(src)}"
+        title="${escapeHtml(content.title)} capítulo ${page + 1}"
+      ></iframe>
+    `;
+  }
+
   return `<img class="${className}" data-reader-page-index="${page}" src="${escapeHtml(src)}" alt="${escapeHtml(content.title)} página ${page + 1}" loading="${vertical && page >= 2 ? "lazy" : "eager"}" />`;
+}
+
+function bindReaderEpubFrames(): void {
+  document.querySelectorAll<HTMLIFrameElement>(".reader-epub").forEach((frame) => {
+    const resize = () => {
+      const doc = frame.contentDocument;
+      if (!doc?.documentElement || !doc.body) {
+        return;
+      }
+
+      const height = Math.max(
+        doc.documentElement.scrollHeight,
+        doc.documentElement.offsetHeight,
+        doc.body.scrollHeight,
+        doc.body.offsetHeight,
+        window.innerHeight
+      );
+      frame.style.height = `${height}px`;
+    };
+
+    frame.addEventListener("load", () => {
+      resize();
+      const doc = frame.contentDocument;
+      if (!doc?.body || typeof ResizeObserver === "undefined") {
+        return;
+      }
+
+      doc.addEventListener("pointerdown", () => {
+        if (!state.reader) {
+          return;
+        }
+
+        state.reader.controlsVisible = !state.reader.controlsVisible;
+        renderReaderOverlay();
+      });
+
+      const observer = new ResizeObserver(resize);
+      observer.observe(doc.body);
+      observer.observe(doc.documentElement);
+    }, { once: true });
+  });
 }
 
 function renderReaderBookmarks(bookmarks: Bookmark[]): string {
@@ -3419,7 +3666,8 @@ function renderReaderBookmarks(bookmarks: Bookmark[]): string {
 }
 
 function getPageUrl(content: ContentItem, page: number): string {
-  return `/api/contents/${encodeURIComponent(content.id)}/pages/${page}`;
+  const theme = state.reader?.content.id === content.id && content.pageTypes[page] === "epub" ? `?theme=${encodeURIComponent(state.reader.bookTheme)}` : "";
+  return `/api/contents/${encodeURIComponent(content.id)}/pages/${page}${theme}`;
 }
 
 function bindShellEvents(): void {
@@ -3982,6 +4230,11 @@ function bindShellEvents(): void {
     void saveVaultSettings(event.currentTarget as HTMLFormElement);
   });
 
+  document.querySelector("#reading-settings-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveReadingModeSettings(event.currentTarget as HTMLFormElement);
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-library-id]").forEach((button) => {
     button.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("[data-library-menu-id], [data-scan-library-id], .library-context-menu")) {
@@ -4139,6 +4392,14 @@ function bindShellEvents(): void {
     });
   });
 
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-reading-now]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void removeFromReadingNow(button.dataset.removeReadingNow ?? "");
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-remove-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -4208,7 +4469,9 @@ function bindShellEvents(): void {
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-chapter-open]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const content = findContentById(button.dataset.chapterOpen ?? "");
       if (!content) {
         return;
@@ -4236,6 +4499,14 @@ function bindShellEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-series-layout]").forEach((button) => {
     button.addEventListener("click", () => {
       state.seriesChapterLayout = button.dataset.seriesLayout === "grid" ? "grid" : "list";
+      renderShell();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-home-layout]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.homeLayout = button.dataset.homeLayout === "list" ? "list" : "grid";
+      localStorage.setItem("pugotiread-home-layout", state.homeLayout);
       renderShell();
     });
   });
@@ -4374,16 +4645,35 @@ function updateReaderFullscreenButton(): void {
   }
 
   const label = getReaderFullscreenLabel();
-  const icon = isReaderFullscreen() ? "fa-compress" : "fa-expand";
-  button.querySelector("i")!.className = `fa-solid ${icon}`;
+  const icon = isReaderFullscreen() ? "fullscreenExit" : "fullscreen";
+  const iconElement = button.querySelector<HTMLElement>(".icon");
+  if (iconElement) {
+    iconElement.innerHTML = renderIcon(icon);
+  }
   button.title = label;
   button.setAttribute("aria-label", label);
 }
 
+function getLibraryForContent(content: ContentItem): Library | null {
+  return [...state.libraries, ...state.personalLibraries].find((library) => library.id === content.libraryId) ?? null;
+}
+
 function openReader(content: ContentItem, page: number): void {
   const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
-  state.reader = { content, page: safePage, mode: "vertical-scroll", fitting: "height", zoom: 100, brightness: 100, controlsVisible: false };
+  const library = getLibraryForContent(content);
+  const defaults = state.readingSettingsDraft[library?.kind ?? "other"];
+  state.reader = {
+    content,
+    page: safePage,
+    mode: defaults.mode,
+    fitting: defaults.fitting,
+    zoom: 100,
+    brightness: 100,
+    bookTheme: "light",
+    controlsVisible: defaults.controlsVisible || content.pageTypes.includes("epub")
+  };
   state.activeSeriesId = content.id;
+  rememberReadingProgress(content, safePage);
 }
 
 function openReaderAtPageAndRender(content: ContentItem, page: number): void {
@@ -4460,6 +4750,31 @@ function scrollReaderToPage(page: number): void {
 function openReaderAtProgress(content: ContentItem): void {
   const progress = getProgressForContent(content.id);
   openReader(content, progress?.currentPage ?? 0);
+}
+
+function rememberReadingProgress(content: ContentItem, page: number): void {
+  if (!state.user) {
+    return;
+  }
+
+  const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
+  const nextProgress: ReadingProgress = {
+    userId: state.user.id,
+    contentId: content.id,
+    currentPage: safePage,
+    updatedAt: new Date().toISOString()
+  };
+  state.progress = [
+    nextProgress,
+    ...state.progress.filter((progress) => progress.contentId !== content.id)
+  ];
+
+  void api<void>("/api/progress", {
+    method: "PUT",
+    body: JSON.stringify({ contentId: content.id, currentPage: safePage })
+  })
+    .then(() => refreshProgress())
+    .catch((error) => console.error(error));
 }
 
 async function openSeries(contentId: string): Promise<void> {
@@ -4589,6 +4904,25 @@ async function removeFromReadingList(contentId: string): Promise<void> {
   renderShell();
 }
 
+async function removeFromReadingNow(contentId: string): Promise<void> {
+  if (!contentId) {
+    return;
+  }
+
+  state.openSeriesMenuId = null;
+  state.openSeriesAddMenuId = null;
+  state.openSeriesRemoveMenuId = null;
+  try {
+    await api<void>(`/api/progress?contentId=${encodeURIComponent(contentId)}`, { method: "DELETE" });
+    await refreshProgress();
+    state.scanMessage = "";
+    renderShell();
+  } catch (error) {
+    state.scanMessage = error instanceof Error ? error.message : "Não foi possível remover de Lendo agora.";
+    renderShell();
+  }
+}
+
 async function removeFromCollection(collectionId: string, contentId: string): Promise<void> {
   if (!collectionId || !contentId) {
     return;
@@ -4616,15 +4950,21 @@ async function markSeriesRead(contentId: string): Promise<void> {
     return;
   }
 
-  await api<void>("/api/progress", {
-    method: "PUT",
-    body: JSON.stringify({ contentId, currentPage: Math.max(content.pageCount - 1, 0) })
-  });
   state.openSeriesMenuId = null;
   state.openSeriesAddMenuId = null;
   state.openSeriesRemoveMenuId = null;
-  await refreshProgress();
-  renderShell();
+  try {
+    await api<void>("/api/progress", {
+      method: "PUT",
+      body: JSON.stringify({ contentId, currentPage: Math.max(content.pageCount - 1, 0) })
+    });
+    await refreshProgress();
+    state.scanMessage = "";
+    renderShell();
+  } catch (error) {
+    state.scanMessage = error instanceof Error ? error.message : "Não foi possível marcar a série como lida.";
+    renderShell();
+  }
 }
 
 async function markSeriesUnread(contentId: string): Promise<void> {
@@ -4632,12 +4972,18 @@ async function markSeriesUnread(contentId: string): Promise<void> {
     return;
   }
 
-  await api<void>(`/api/progress?contentId=${encodeURIComponent(contentId)}`, { method: "DELETE" });
   state.openSeriesMenuId = null;
   state.openSeriesAddMenuId = null;
   state.openSeriesRemoveMenuId = null;
-  await refreshProgress();
-  renderShell();
+  try {
+    await api<void>(`/api/progress?contentId=${encodeURIComponent(contentId)}`, { method: "DELETE" });
+    await refreshProgress();
+    state.scanMessage = "";
+    renderShell();
+  } catch (error) {
+    state.scanMessage = error instanceof Error ? error.message : "Não foi possível marcar a série como não lida.";
+    renderShell();
+  }
 }
 
 async function scanSeries(contentId: string): Promise<void> {
@@ -4687,7 +5033,15 @@ function getContentsByIdsFrom(contents: ContentItem[], contentIds: string[]): Co
 
 function getAvailableContents(): ContentItem[] {
   const byId = new Map<string, ContentItem>();
-  for (const content of [...state.homeContents, ...state.contents]) {
+  for (const content of [...state.readingNowContents, ...state.homeContents, ...state.contents]) {
+    byId.set(content.id, content);
+  }
+  return [...byId.values()].sort((a, b) => a.title.localeCompare(b.title, "pt-BR", { numeric: true }));
+}
+
+function getReadingNowContents(): ContentItem[] {
+  const byId = new Map<string, ContentItem>();
+  for (const content of [...state.readingNowContents, ...state.homeContents, ...state.contents]) {
     byId.set(content.id, content);
   }
   return [...byId.values()].sort((a, b) => a.title.localeCompare(b.title, "pt-BR", { numeric: true }));
@@ -4768,6 +5122,15 @@ function bindReaderDelegatedEvents(): void {
         // In Kavita, this toggles between LTR and RTL reading direction.
         // For now, cycle reader mode as a proxy.
         state.reader.mode = getNextReaderMode(state.reader.mode);
+        state.reader.controlsVisible = true;
+        renderShell();
+        if (state.reader.mode === "vertical-scroll") {
+          requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
+        }
+        break;
+
+      case "toggle-book-theme":
+        state.reader.bookTheme = state.reader.bookTheme === "dark" ? "light" : "dark";
         state.reader.controlsVisible = true;
         renderShell();
         if (state.reader.mode === "vertical-scroll") {

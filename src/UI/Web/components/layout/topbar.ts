@@ -76,7 +76,7 @@ export function renderTopbar(userName: string): string {
       </div>
       <div class="topbar-actions">
         <div class="search-menu-shell">
-          <button class="icon-button" id="search-button" type="button" title="Pesquisar" aria-label="Pesquisar"><i class="fa-solid fa-magnifying-glass"></i></button>
+          <button class="icon-button" id="search-button" type="button" title="Pesquisar" aria-label="Pesquisar">${renderIcon("search")}</button>
           <label class="search-shell">
             <span class="visually-hidden">Pesquisar</span>
             <input class="search" id="search" placeholder="Search (Procurar)" value="" />
@@ -88,7 +88,7 @@ export function renderTopbar(userName: string): string {
           <button class="icon-button" id="stats-button" type="button" title="Estatísticas" aria-expanded="${state.statsMenuOpen}">${renderIcon("stats")}</button>
           ${state.statsMenuOpen ? renderStatsMenu() : ""}
         </div>
-        <button class="icon-button" id="theme-toggle" type="button" title="${state.darkMode ? "Modo claro" : "Modo escuro"}"><i class="fa-solid ${state.darkMode ? "fa-sun" : "fa-moon"}"></i></button>
+        <button class="icon-button" id="theme-toggle" type="button" title="${state.darkMode ? "Modo claro" : "Modo escuro"}">${renderIcon(state.darkMode ? "sun" : "moon")}</button>
         <button class="icon-button" id="settings-button" type="button" title="Configurações">${renderIcon("settings")}</button>
         <div class="account-menu-shell">
           <button class="avatar-button" id="account-button" type="button" aria-expanded="${state.accountMenuOpen}" title="${escapeHtml(userName)}">

@@ -3,10 +3,24 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, PasswordResetToken, ReadingProgress, SeriesMark, ServerSettings, StoreShape, User } from "../shared/types.js";
+import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, ReaderFittingMode, ReaderMode, ReadingProgress, SeriesMark, ServerSettings, StoreShape, User } from "../shared/types.js";
+
+const libraryKinds: LibraryKind[] = ["manga", "manhwa", "book", "comic", "lightNovel", "other"];
+const readerModes: ReaderMode[] = ["horizontal", "paged-vertical", "vertical-scroll"];
+const readerFittingModes: ReaderFittingMode[] = ["height", "width", "original"];
+
+export const defaultReadingDefaults: ServerSettings["readingDefaults"] = {
+  manga: { mode: "horizontal", fitting: "height", controlsVisible: false },
+  manhwa: { mode: "vertical-scroll", fitting: "width", controlsVisible: false },
+  book: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
+  comic: { mode: "horizontal", fitting: "height", controlsVisible: false },
+  lightNovel: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
+  other: { mode: "vertical-scroll", fitting: "height", controlsVisible: false }
+};
 
 export const defaultServerSettings: ServerSettings = {
-  vaultTimeoutMinutes: 5
+  vaultTimeoutMinutes: 5,
+  readingDefaults: defaultReadingDefaults
 };
 
 function makeInitialStore(): StoreShape {
@@ -37,6 +51,28 @@ export function normalizeVaultTimeoutMinutes(value: unknown): number {
     return defaultServerSettings.vaultTimeoutMinutes;
   }
   return minutes;
+}
+
+export function normalizeReadingDefaults(value: unknown): ServerSettings["readingDefaults"] {
+  const raw = value && typeof value === "object" ? value as Partial<ServerSettings["readingDefaults"]> : {};
+  return Object.fromEntries(libraryKinds.map((kind) => {
+    const item = raw[kind];
+    const mode = item && readerModes.includes(item.mode) ? item.mode : defaultReadingDefaults[kind].mode;
+    const fitting = item && readerFittingModes.includes(item.fitting) ? item.fitting : defaultReadingDefaults[kind].fitting;
+    const controlsVisible = typeof item?.controlsVisible === "boolean" ? item.controlsVisible : defaultReadingDefaults[kind].controlsVisible;
+    return [kind, { mode, fitting, controlsVisible }];
+  })) as ServerSettings["readingDefaults"];
+}
+
+function parseSettingJson(value: string | undefined): unknown {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 export class Store {
@@ -282,8 +318,15 @@ export class Store {
         DELETE FROM password_reset_tokens
       `);
 
+      const settings = {
+        vaultTimeoutMinutes: normalizeVaultTimeoutMinutes(data.settings?.vaultTimeoutMinutes),
+        readingDefaults: normalizeReadingDefaults(data.settings?.readingDefaults)
+      };
+
       this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)")
-        .run("vaultTimeoutMinutes", String(data.settings.vaultTimeoutMinutes));
+        .run("vaultTimeoutMinutes", String(settings.vaultTimeoutMinutes));
+      this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)")
+        .run("readingDefaults", JSON.stringify(settings.readingDefaults));
 
       const insUser = this.db.prepare(`
         INSERT INTO users (id, username, displayName, email, avatarUrl, googleSub, nickname, biography, location, favoriteContentIds, canLogin, canDownload, canChangePassword, passwordChangeRequiresEmailConfirmation, lastActiveAt, role, passwordHash, allowedLibraryIds)
@@ -342,6 +385,7 @@ export class Store {
   async read(): Promise<StoreShape> {
     const stmt = this.db.prepare("SELECT value FROM settings WHERE key = ?");
     const settingsRow = stmt.get("vaultTimeoutMinutes") as { value: string } | undefined;
+    const readingDefaultsRow = stmt.get("readingDefaults") as { value: string } | undefined;
 
     const users = this.db.prepare("SELECT * FROM users").all().map(r => this.rowToUser(r as Record<string, unknown>));
     const libraries = this.db.prepare("SELECT * FROM libraries").all() as Library[];
@@ -370,7 +414,8 @@ export class Store {
 
     return {
       settings: {
-        vaultTimeoutMinutes: settingsRow ? Number(settingsRow.value) : defaultServerSettings.vaultTimeoutMinutes
+        vaultTimeoutMinutes: settingsRow ? Number(settingsRow.value) : defaultServerSettings.vaultTimeoutMinutes,
+        readingDefaults: normalizeReadingDefaults(parseSettingJson(readingDefaultsRow?.value) ?? defaultServerSettings.readingDefaults)
       },
       users, libraries, progress, bookmarks, seriesMarks,
       wantToRead, readingList, collections, reviews, invitations, passwordResetTokens
@@ -417,10 +462,14 @@ export class Store {
   }
 
   async updateSettings(updates: Partial<ServerSettings>): Promise<ServerSettings> {
-    const vaultTimeoutMinutes = normalizeVaultTimeoutMinutes(updates.vaultTimeoutMinutes ?? defaultServerSettings.vaultTimeoutMinutes);
+    const current = await this.read();
+    const vaultTimeoutMinutes = normalizeVaultTimeoutMinutes(updates.vaultTimeoutMinutes ?? current.settings.vaultTimeoutMinutes);
+    const readingDefaults = normalizeReadingDefaults(updates.readingDefaults ?? current.settings.readingDefaults);
     this.db.prepare("INSERT INTO settings (key, value) VALUES ('vaultTimeoutMinutes', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(String(vaultTimeoutMinutes));
-    return { vaultTimeoutMinutes };
+    this.db.prepare("INSERT INTO settings (key, value) VALUES ('readingDefaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(readingDefaults));
+    return { vaultTimeoutMinutes, readingDefaults };
   }
 
   async updateUser(userId: string, updates: Partial<Pick<User, "email" | "displayName" | "username" | "avatarUrl" | "googleSub" | "nickname" | "biography" | "location" | "favoriteContentIds" | "canLogin" | "canDownload" | "canChangePassword" | "passwordChangeRequiresEmailConfirmation" | "allowedLibraryIds" | "passwordHash" | "role">>): Promise<User | null> {

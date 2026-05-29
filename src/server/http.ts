@@ -15,7 +15,16 @@ const contentTypes = new Map([
   [".gif", "image/gif"],
   [".avif", "image/avif"],
   [".svg", "image/svg+xml"],
-  [".pdf", "application/pdf"]
+  [".pdf", "application/pdf"],
+  [".epub", "application/epub+zip"],
+  [".xhtml", "application/xhtml+xml; charset=utf-8"],
+  [".xml", "application/xml; charset=utf-8"],
+  [".opf", "application/oebps-package+xml; charset=utf-8"],
+  [".ncx", "application/x-dtbncx+xml; charset=utf-8"],
+  [".otf", "font/otf"],
+  [".ttf", "font/ttf"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"]
 ]);
 
 function getStaticCacheControl(filePath: string): string {
@@ -55,11 +64,31 @@ function getFileCacheControl(filePath: string): string {
   return "private, max-age=3600";
 }
 
-export async function sendFile(res: ServerResponse, filePath: string): Promise<void> {
+export async function sendFile(res: ServerResponse, filePath: string, cacheControl = getFileCacheControl(filePath)): Promise<void> {
   const file = await fs.readFile(filePath);
   const ext = path.extname(filePath).toLowerCase();
   res.writeHead(200, {
     "Content-Type": contentTypes.get(ext) ?? "application/octet-stream",
+    "Cache-Control": cacheControl
+  });
+  res.end(file);
+}
+
+export function getContentType(filePath: string): string {
+  return contentTypes.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream";
+}
+
+export function sendHtml(res: ServerResponse, html: string): void {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private, max-age=3600"
+  });
+  res.end(html);
+}
+
+export function sendBuffer(res: ServerResponse, filePath: string, file: Buffer): void {
+  res.writeHead(200, {
+    "Content-Type": getContentType(filePath),
     "Cache-Control": getFileCacheControl(filePath)
   });
   res.end(file);

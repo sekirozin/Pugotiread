@@ -1,4 +1,5 @@
 import type { ContentItem } from "../../../shared/types.js";
+import { hasRecentlyUpdatedChapters, isRecentlyUpdatedChapter } from "../services/recent-updates.js";
 import { state } from "../state/store.js";
 import { renderIcon, renderSidebarIcon } from "./icons.js";
 
@@ -24,22 +25,44 @@ function renderLatestChapters(content: ContentItem): string {
   return `
     <div class="series-latest-chapters" aria-label="Últimos capítulos de ${escapeHtml(content.title)}">
       ${latestChapters.map((chapter) => `
-        <div class="series-latest-chapter">
+        <button class="series-latest-chapter${isRecentlyUpdatedChapter(chapter) ? " recent-update" : ""}" data-chapter-open="${escapeHtml(content.id)}" data-chapter-start="${chapter.startPage}" type="button" aria-label="Abrir ${escapeHtml(chapter.name)} de ${escapeHtml(content.title)}">
           <span class="chapter-status-dot" aria-hidden="true"></span>
           <span class="series-latest-chapter-name">${escapeHtml(chapter.name)}</span>
           <span class="series-latest-chapter-pages">${chapter.pageCount} pág.</span>
-        </div>
+        </button>
       `).join("")}
     </div>
   `;
+}
+
+function renderSeriesCardMeta(content: ContentItem): string {
+  const marked = state.seriesMarks.includes(content.id);
+
+  if (state.activeView !== "want") {
+    return `${content.pageCount} páginas${marked ? " · marcado" : ""}`;
+  }
+
+  const progress = state.progress.find((item) => item.contentId === content.id);
+  if (!progress) {
+    return `${content.pageCount} páginas${marked ? " · marcado" : ""}`;
+  }
+
+  const chapter = content.chapters.find((item) => {
+    const endPage = item.startPage + item.pageCount - 1;
+    return progress.currentPage >= item.startPage && progress.currentPage <= endPage;
+  });
+  const pageLabel = `pág. ${progress.currentPage + 1}/${content.pageCount}`;
+
+  return `${chapter ? `${chapter.name} · ` : ""}${pageLabel}`;
 }
 
 export function renderSeriesCard(content: ContentItem, cardKey = content.id): string {
   const showMarkButton = state.activeView === "library";
   const marked = state.seriesMarks.includes(content.id);
   const menuOpen = state.openSeriesMenuId === cardKey;
+  const hasRecentUpdate = hasRecentlyUpdatedChapters(content.chapters);
   return `
-    <article class="content-card series-card">
+    <article class="content-card series-card${hasRecentUpdate ? " recent-update" : ""}">
       ${
         content.coverUrl
           ? `<img class="cover-image" src="${escapeHtml(content.coverUrl)}" alt="Capa de ${escapeHtml(content.title)}" loading="lazy" />`
@@ -56,11 +79,11 @@ export function renderSeriesCard(content: ContentItem, cardKey = content.id): st
       <div class="series-footer">
         <span class="series-file-icon" aria-hidden="true">${renderSidebarIcon("book", "Obra")}</span>
         <span class="content-title">${escapeHtml(content.title)}</span>
-        <button class="series-menu-button" data-series-menu-key="${escapeHtml(cardKey)}" type="button" aria-label="Opções de ${escapeHtml(content.title)}" aria-expanded="${menuOpen}">⋮</button>
+        <button class="series-menu-button" data-series-menu-key="${escapeHtml(cardKey)}" type="button" aria-label="Opções de ${escapeHtml(content.title)}" aria-expanded="${menuOpen}">${renderIcon("moreVertical")}</button>
       </div>
       ${menuOpen ? renderSeriesContextMenu(content, cardKey) : ""}
       ${renderLatestChapters(content)}
-      <p class="series-meta">${content.pageCount} páginas${marked ? " · marcado" : ""}</p>
+      <p class="series-meta">${escapeHtml(renderSeriesCardMeta(content))}</p>
       <button class="series-open" data-series-open="${content.id}" aria-label="Abrir ${escapeHtml(content.title)}"></button>
     </article>
   `;
@@ -73,12 +96,12 @@ function renderSeriesContextMenu(content: ContentItem, cardKey: string): string 
     <div class="series-context-menu" role="menu" aria-label="Opções de ${escapeHtml(content.title)}">
       <button class="series-menu-item has-submenu" data-series-add-menu-key="${escapeHtml(cardKey)}" type="button" role="menuitem" aria-expanded="${addMenuOpen}">
         <span>Adicionar a</span>
-        <span aria-hidden="true">›</span>
+        <span aria-hidden="true">${renderIcon("caretRight")}</span>
       </button>
       ${addMenuOpen ? renderSeriesAddMenu(content) : ""}
       <button class="series-menu-item has-submenu" data-series-remove-menu-key="${escapeHtml(cardKey)}" type="button" role="menuitem" aria-expanded="${removeMenuOpen}">
         <span>Remover de</span>
-        <span aria-hidden="true">›</span>
+        <span aria-hidden="true">${renderIcon("caretRight")}</span>
       </button>
       ${removeMenuOpen ? renderSeriesRemoveMenu(content) : ""}
       <button class="series-menu-item" data-series-mark-read="${content.id}" type="button" role="menuitem">Marcar como lido</button>
@@ -90,13 +113,20 @@ function renderSeriesContextMenu(content: ContentItem, cardKey: string): string 
 
 function renderSeriesRemoveMenu(content: ContentItem): string {
   const removableCollections = state.collections.filter((collection) => collection.userId === state.user?.id && collection.contentIds.includes(content.id));
+  const hasProgress = state.progress.some((progress) => progress.contentId === content.id);
   const hasRemovableItems =
+    hasProgress ||
     state.wantToRead.includes(content.id) ||
     state.readingList.includes(content.id) ||
     removableCollections.length > 0;
 
   return `
     <div class="series-remove-menu" role="menu" aria-label="Remover ${escapeHtml(content.title)} de">
+      ${
+        hasProgress
+          ? `<button class="series-menu-item" data-remove-reading-now="${content.id}" type="button" role="menuitem">Lendo agora</button>`
+          : ""
+      }
       ${
         state.wantToRead.includes(content.id)
           ? `<button class="series-menu-item" data-remove-want="${content.id}" type="button" role="menuitem">Quero ler</button>`
@@ -117,7 +147,6 @@ function renderSeriesAddMenu(content: ContentItem): string {
   const ownedCollections = state.collections.filter((collection) => collection.userId === state.user?.id);
   return `
     <div class="series-add-menu" role="menu" aria-label="Adicionar ${escapeHtml(content.title)} a">
-      <button class="series-menu-item" data-add-want="${content.id}" type="button" role="menuitem">Quero ler</button>
       <button class="series-menu-item" data-add-reading-list="${content.id}" type="button" role="menuitem">Lista de leitura</button>
       ${
         ownedCollections.length

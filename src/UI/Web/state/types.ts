@@ -6,6 +6,8 @@ import type {
   LibraryKind,
   PublicContentReview,
   PublicUser,
+  ReaderFittingMode,
+  ReaderMode,
   ReadingProgress,
   ServerSettings
 } from "../../../shared/types.js";
@@ -24,8 +26,8 @@ export type PeopleUser = PublicUser & {
   reviewCount: number;
 };
 
-export type ReaderMode = "horizontal" | "paged-vertical" | "vertical-scroll";
-export type FittingMode = "height" | "width" | "original";
+export type { ReaderMode };
+export type FittingMode = ReaderFittingMode;
 
 export type AppState = {
   user: PublicUser | null;
@@ -35,6 +37,7 @@ export type AppState = {
   peopleUsers: PeopleUser[];
   contents: ContentItem[];
   homeContents: ContentItem[];
+  readingNowContents: ContentItem[];
   activeLibraryId: string | null;
   loadingLibraryId: string | null;
   libraryLoadError: string;
@@ -52,7 +55,7 @@ export type AppState = {
     | "profile"
     | "settings";
   settingsSection: "account" | "server";
-  serverSection: "libraries" | "users" | "vault";
+  serverSection: "libraries" | "users" | "vault" | "reading";
   accountMenuOpen: boolean;
   statsMenuOpen: boolean;
   openLibraryMenuId: string | null;
@@ -106,6 +109,7 @@ export type AppState = {
   wantToRead: string[];
   readingList: string[];
   collections: UserCollection[];
+  homeLayout: "grid" | "list";
   seriesChapterOrder: "asc" | "desc" | "last-read";
   seriesChapterLayout: "list" | "grid";
   seriesTab: "chapters" | "specials" | "reviews";
@@ -135,6 +139,9 @@ export type AppState = {
   vaultSettingsDraft: string;
   vaultSettingsMessage: string;
   vaultSettingsError: string;
+  readingSettingsDraft: ServerSettings["readingDefaults"];
+  readingSettingsMessage: string;
+  readingSettingsError: string;
   adminUserModalOpen: boolean;
   adminUserModalMode: "create" | "edit" | "invite";
   adminUserEditingId: string | null;
@@ -159,6 +166,7 @@ export type AppState = {
     fitting: FittingMode;
     zoom: number;
     brightness: number;
+    bookTheme: "light" | "dark";
     controlsVisible: boolean;
   } | null;
 };

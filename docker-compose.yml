@@ -16,4 +16,25 @@ services:
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
       - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || '8099') + '/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  pugotiread-autoheal:
+    image: docker:27-cli
+    container_name: pugotiread-autoheal
+    command: >
+      sh -c 'while true; do
+        status=$$(docker inspect -f "{{.State.Health.Status}}" pugotiread 2>/dev/null || true);
+        if [ "$$status" = "unhealthy" ]; then
+          docker restart pugotiread;
+        fi;
+        sleep 30;
+      done'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

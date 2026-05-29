@@ -8,52 +8,71 @@ function escapeAttribute(value: string): string {
 }
 
 export const ICONS = {
-  menu: "☰",
-  badge: "▣",
-  stats: "⌁",
-  settings: "⚙",
-  caret: "⌄",
-  home: "⌂",
-  want: "★",
-  collections: "☷",
-  lists: "≡",
-  bookmarks: "▮",
-  all: "▤",
-  lock: "▣",
-  people: "♟",
-  libraryBook: "▰",
-  libraryManga: "▣",
-  close: "×",
-  mark: "▣",
-  file: "▧",
-  author: "✎",
-  release: "◷",
-  genres: "▣",
-  progress: "▸",
-  rating: "★",
-  continue: "▤",
-  share: "↗"
+  menu: "ph-list",
+  badge: "ph-squares-four",
+  stats: "ph-chart-bar",
+  settings: "ph-gear",
+  caret: "ph-caret-down",
+  caretRight: "ph-caret-right",
+  home: "ph-house",
+  want: "ph-book-open",
+  collections: "ph-stack",
+  lists: "ph-playlist",
+  bookmarks: "ph-bookmark-simple",
+  bookmarksFilled: "ph-bookmark-simple-fill",
+  all: "ph-books",
+  lock: "ph-lock",
+  people: "ph-users",
+  libraryBook: "ph-book",
+  libraryManga: "ph-book-open-text",
+  close: "ph-x",
+  mark: "ph-seal-check",
+  file: "ph-file-text",
+  author: "ph-user",
+  release: "ph-calendar",
+  genres: "ph-tag",
+  progress: "ph-gauge",
+  rating: "ph-star",
+  ratingFilled: "ph-star-fill",
+  continue: "ph-play-circle",
+  share: "ph-arrow-square-out",
+  book: "ph-book",
+  pencil: "ph-pencil",
+  vaultOpen: "ph-lock-open",
+  vaultClosed: "ph-lock",
+  trash: "ph-trash",
+  search: "ph-magnifying-glass",
+  sun: "ph-sun",
+  moon: "ph-moon",
+  back: "ph-arrow-left",
+  forward: "ph-arrow-right",
+  rewind: "ph-rewind",
+  fastForward: "ph-fast-forward",
+  skipBack: "ph-skip-back",
+  skipForward: "ph-skip-forward",
+  fullscreen: "ph-corners-out",
+  fullscreenExit: "ph-corners-in",
+  direction: "ph-arrows-left-right",
+  fitHeight: "ph-arrows-out-line-vertical",
+  fitWidth: "ph-arrows-out-line-horizontal",
+  fitOriginal: "ph-arrows-in",
+  readerHorizontal: "ph-arrows-left-right",
+  readerVertical: "ph-rows",
+  grid: "ph-squares-four",
+  moreVertical: "ph-dots-three-vertical",
+  more: "ph-dots-three",
+  minus: "ph-minus",
+  plus: "ph-plus"
 } as const;
 
-export function renderIcon(name: keyof typeof ICONS): string {
-  return ICONS[name];
+export type IconName = keyof typeof ICONS;
+
+export function renderIcon(name: IconName, label?: string): string {
+  const title = label ? `<title>${escapeAttribute(label)}</title>` : "";
+  const ariaLabel = label ? ` aria-label="${escapeAttribute(label)}"` : "";
+  return `<svg class="phosphor-icon" viewBox="0 0 256 256" aria-hidden="${label ? "false" : "true"}"${ariaLabel} focusable="false" role="${label ? "img" : "presentation"}">${title}<use href="/phosphor-sprite.svg#${ICONS[name]}"></use></svg>`;
 }
 
-export const SIDEBAR_ICON_PATHS = {
-  home: "/icons/home/home_32x32.png",
-  want: "/icons/star/star_32x32.png",
-  collections: "/icons/medal/medal_32x32.png",
-  lists: "/icons/list/list_32x32.png",
-  bookmarks: "/icons/markbook/markbook_32x32.png",
-  all: "/icons/book/book_32x32.png",
-  people: "/icons/users/users_32x32.png",
-  book: "/icons/book/book_32x32.png",
-  pencil: "/icons/pencil/pencil_32x32.png",
-  vaultOpen: "/icons/lock_open/lock_open_32x32.png",
-  vaultClosed: "/icons/lock_closed/lock_closed_32x32.png",
-  trash: "/icons/trash/trash_32x32.png"
-} as const;
-
-export function renderSidebarIcon(name: keyof typeof SIDEBAR_ICON_PATHS, label: string): string {
-  return `<img class="nav-image-icon" src="${SIDEBAR_ICON_PATHS[name]}" alt="" aria-hidden="true" title="${escapeAttribute(label)}" />`;
+export function renderSidebarIcon(name: IconName, label: string): string {
+  return renderIcon(name, label);
 }

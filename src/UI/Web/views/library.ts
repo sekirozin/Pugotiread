@@ -1,4 +1,5 @@
 import type { ContentItem, Library } from "../../../shared/types.js";
+import { renderIcon } from "../components/icons.js";
 import { renderLibraryContextMenu } from "../components/layout/sidebar.js";
 import { renderSeriesCard } from "../components/series-card.js";
 import { state } from "../state/store.js";
@@ -35,7 +36,7 @@ export function renderLibraryView(activeLibrary: Library | undefined, contents: 
           state.user?.role === "admin" && activeLibrary
             ? `
               <span class="inline-menu-shell">
-                <button class="inline-more" data-library-menu-id="${activeLibrary.id}" type="button">⋮</button>
+                <button class="inline-more" data-library-menu-id="${activeLibrary.id}" type="button">${renderIcon("moreVertical")}</button>
                 ${state.openLibraryMenuId === activeLibrary.id ? renderLibraryContextMenu(activeLibrary) : ""}
               </span>
             `

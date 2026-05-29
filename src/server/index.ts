@@ -4,10 +4,11 @@ import http from "node:http";
 import path from "node:path";
 import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, isPasswordHashReady, setSessionCookie, toPublicUser, verifyGoogleIdToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
-import { readJson, sendFile, sendJson, sendNoContent, serveStatic } from "./http.js";
+import { cacheService } from "./cache.js";
+import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
-import { getContentCoverPath, getContentCoverThumbnail, getContentPagePath, scanLibrary } from "./media.js";
-import { normalizeVaultTimeoutMinutes, store } from "./store.js";
+import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary } from "./media.js";
+import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
 import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
 
 function isPersonalLibrary(library: Library): boolean {
@@ -101,6 +102,18 @@ function parseContentPagePath(pathname: string): { contentId: string; pageIndex:
   return {
     contentId: decodeURIComponent(match[1] ?? ""),
     pageIndex: Number(match[2])
+  };
+}
+
+function parseContentEpubAssetPath(pathname: string): { contentId: string; assetPath: string } | null {
+  const match = pathname.match(/^\/api\/contents\/(.+)\/epub-assets\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    contentId: decodeURIComponent(match[1] ?? ""),
+    assetPath: (match[2] ?? "").split("/").map((part) => decodeURIComponent(part)).join("/")
   };
 }
 
@@ -291,7 +304,24 @@ function makePublicCollection(collection: ContentCollection, owner?: User): Pick
 }
 
 function isLibraryKind(value: string): value is LibraryKind {
-  return value === "manga" || value === "manhwa" || value === "book";
+  return value === "manga" || value === "manhwa" || value === "book" || value === "comic" || value === "lightNovel" || value === "other";
+}
+
+function isSyncSkippedLibraryKind(kind: LibraryKind): boolean {
+  return kind === "book" || kind === "lightNovel";
+}
+
+async function invalidateLibraryScanCache(libraryId: string): Promise<void> {
+  cacheService.invalidateScan(libraryId);
+  await cacheService.invalidateLibraryCovers(libraryId);
+}
+
+function getNoDetectedContentMessage(kind: LibraryKind): string {
+  if (kind === "book" || kind === "lightNovel") {
+    return "Nenhuma obra detectada. Para livros, coloque arquivos .epub na pasta da biblioteca ou dentro de pastas de obras.";
+  }
+
+  return "Nenhuma obra detectada. A pasta deve conter pastas de obras com imagens ou PDFs.";
 }
 
 function isInsideMediaRoot(candidatePath: string): boolean {
@@ -844,13 +874,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     const body = await readJson<Partial<ServerSettings>>(req);
-    if (!Number.isInteger(Number(body.vaultTimeoutMinutes)) || Number(body.vaultTimeoutMinutes) < 1) {
+    if (body.vaultTimeoutMinutes !== undefined && (!Number.isInteger(Number(body.vaultTimeoutMinutes)) || Number(body.vaultTimeoutMinutes) < 1)) {
       sendJson(res, 400, { error: "O tempo do cofre deve ser um número inteiro maior que zero." });
       return;
     }
 
     const settings = await store.updateSettings({
-      vaultTimeoutMinutes: Number(body.vaultTimeoutMinutes)
+      vaultTimeoutMinutes: body.vaultTimeoutMinutes === undefined ? undefined : Number(body.vaultTimeoutMinutes),
+      readingDefaults: body.readingDefaults === undefined ? undefined : normalizeReadingDefaults(body.readingDefaults)
     });
     sendJson(res, 200, { settings });
     return;
@@ -1065,7 +1096,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     };
     const detectedContents = await scanLibrary(candidateLibrary);
     if (detectedContents.length === 0) {
-      sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+      sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
       return;
     }
 
@@ -1123,7 +1154,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     };
     const detectedContents = await scanLibrary(candidateLibrary);
     if (detectedContents.length === 0) {
-      sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+      sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
       return;
     }
 
@@ -1204,6 +1235,19 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    await invalidateLibraryScanCache(library.id);
+
+    if (isSyncSkippedLibraryKind(library.kind)) {
+      const contents = await scanLibrary(library);
+      sendJson(res, 200, {
+        contents,
+        scannedAt: library.lastScannedAt ?? null,
+        skipped: true,
+        reason: "Livros não participam da sincronização de novos capítulos."
+      });
+      return;
+    }
+
     const contents = await scanLibrary(library);
     const scannedAt = new Date().toISOString();
     await store.markLibraryScanned(library.id, scannedAt);
@@ -1219,6 +1263,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    await invalidateLibraryScanCache(visible.library.id);
+
+    if (isSyncSkippedLibraryKind(visible.library.kind)) {
+      const contents = await scanLibrary(visible.library);
+      const content = contents.find((item) => item.id === contentId);
+      sendJson(res, 200, {
+        content,
+        scannedAt: visible.library.lastScannedAt ?? null,
+        skipped: true,
+        reason: "Livros não participam da sincronização de novos capítulos."
+      });
+      return;
+    }
+
     const contents = await scanLibrary(visible.library);
     const content = contents.find((item) => item.id === contentId);
     const scannedAt = new Date().toISOString();
@@ -1228,6 +1286,26 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
   }
 
   if (url.pathname.startsWith("/api/contents/") && req.method === "GET") {
+    const epubAssetRequest = parseContentEpubAssetPath(url.pathname);
+    if (epubAssetRequest) {
+      const data = await store.read();
+      const libraryId = epubAssetRequest.contentId.split(":")[0] ?? "";
+      const library = getRequestLibrary(user, data.libraries, libraryId, req);
+      if (!library) {
+        sendJson(res, 404, { error: "Conteúdo não encontrado." });
+        return;
+      }
+
+      const asset = await getContentEpubAsset(library, epubAssetRequest.contentId, epubAssetRequest.assetPath);
+      if (!asset) {
+        sendJson(res, 404, { error: "Arquivo do EPUB não encontrado." });
+        return;
+      }
+
+      sendBuffer(res, asset.path, asset.data);
+      return;
+    }
+
     const coverRequest = parseContentCoverPath(url.pathname);
     if (coverRequest) {
       const data = await store.read();
@@ -1240,7 +1318,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
       const thumbPath = await getContentCoverThumbnail(library, coverRequest.contentId);
       if (thumbPath) {
-        await sendFile(res, thumbPath);
+        await sendFile(res, thumbPath, "no-cache, no-store, must-revalidate");
         return;
       }
 
@@ -1250,7 +1328,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         return;
       }
 
-      await sendFile(res, coverPath);
+      await sendFile(res, coverPath, "no-cache, no-store, must-revalidate");
       return;
     }
 
@@ -1265,6 +1343,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     const library = getRequestLibrary(user, data.libraries, libraryId, req);
     if (!library) {
       sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+
+    const bookTheme = url.searchParams.get("theme") === "dark" ? "dark" : "light";
+    const epubHtml = await getContentEpubChapterHtml(library, pageRequest.contentId, pageRequest.pageIndex, bookTheme);
+    if (epubHtml) {
+      sendHtml(res, epubHtml);
       return;
     }
 
@@ -1643,6 +1728,15 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.url === "/health") {
+      sendJson(res, 200, {
+        status: "ok",
+        uptimeSeconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
     if (req.url?.startsWith("/api/")) {
       await handleApi(req, res);
       return;

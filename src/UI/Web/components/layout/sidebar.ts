@@ -1,7 +1,7 @@
 import type { Library } from "../../../../shared/types.js";
 import type { AppState } from "../../state/types.js";
 import { state } from "../../state/store.js";
-import { renderSidebarIcon } from "../icons.js";
+import { renderIcon, renderSidebarIcon } from "../icons.js";
 
 function escapeHtml(value: string): string {
   return value
@@ -31,7 +31,7 @@ function renderLibraryButton(library: Library): string {
       ${
         state.user?.role === "admin"
           ? `
-            <span class="nav-more" data-library-menu-id="${library.id}" role="button" tabindex="0" title="Opções da biblioteca">⋮</span>
+            <span class="nav-more" data-library-menu-id="${library.id}" role="button" tabindex="0" title="Opções da biblioteca">${renderIcon("moreVertical")}</span>
             ${state.openLibraryMenuId === library.id ? renderLibraryContextMenu(library) : ""}
           `
           : ""
@@ -46,7 +46,7 @@ function renderVaultNavButton(): string {
     <button class="nav-button library-button${active}" data-nav-view="vault" title="Cofre pessoal">
       <span class="nav-icon" aria-hidden="true">${renderSidebarIcon(state.vaultUnlocked ? "vaultOpen" : "vaultClosed", "Cofre pessoal")}</span>
       <span class="nav-label">Cofre pessoal</span>
-      <span class="nav-more vault-nav-more" data-vault-menu role="button" tabindex="0" title="Opções do cofre">⋮</span>
+      <span class="nav-more vault-nav-more" data-vault-menu role="button" tabindex="0" title="Opções do cofre">${renderIcon("moreVertical")}</span>
       ${state.vaultMenuOpen ? renderVaultContextMenu() : ""}
     </button>
   `;
@@ -68,10 +68,8 @@ function renderVaultContextMenu(): string {
 export function renderLibraryContextMenu(library: Library): string {
   return `
     <span class="library-context-menu" role="menu" aria-label="Opções de ${escapeHtml(library.name)}">
-      <span class="library-menu-item" data-scan-library-id="${library.id}" role="menuitem">Scan Library</span>
+      <span class="library-menu-item" data-scan-library-id="${library.id}" role="menuitem">Escanear biblioteca</span>
       <span class="library-menu-item" data-edit-library="${library.id}" role="menuitem">Editar</span>
-      <span class="library-menu-item disabled" role="menuitem">Reading Profiles ›</span>
-      <span class="library-menu-item disabled" role="menuitem">Others ›</span>
     </span>
   `;
 }
@@ -90,7 +88,7 @@ function renderMainSidebar(): string {
   return `
     <nav class="side-nav" aria-label="Menu principal">
       ${renderNavButton("home", renderSidebarIcon("home", "Início"), "Início")}
-      ${renderNavButton("want", renderSidebarIcon("want", "Quero ler"), "Quero ler")}
+      ${renderNavButton("want", renderSidebarIcon("want", "Lendo agora"), "Lendo agora")}
       ${renderNavButton("collections", renderSidebarIcon("collections", "Coleções"), "Coleções")}
       ${renderNavButton("lists", renderSidebarIcon("lists", "Listas de leitura"), "Listas de leitura")}
       ${renderNavButton("bookmarks", renderSidebarIcon("bookmarks", "Marcadores"), "Marcadores")}
@@ -122,6 +120,7 @@ function renderSettingsSidebar(): string {
               <h3>Servidor</h3>
               ${renderServerSectionButton("libraries", "Bibliotecas")}
               ${renderServerSectionButton("users", "Usuários")}
+              ${renderServerSectionButton("reading", "Modo de leitura")}
               ${renderServerSectionButton("vault", "Cofre pessoal")}
             </div>
           `
