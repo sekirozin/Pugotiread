@@ -23,15 +23,15 @@ ENV CACHE_DIR=/app/data/cache
 ENV PUBLIC_DIR=/app/public
 ENV CLIENT_DIR=/app/dist/client
 ENV MEDIA_ROOT=/media
-ENV MANGASEK_COMMAND=/opt/mangasek/bin/mgk
+ENV PUGOTI_COMMAND=/opt/pugoti/bin/pugoti
 
 COPY package*.json ./
 RUN npm install --omit=dev
 
-COPY --from=mangasekdownloader . /tmp/mangasekdownloader
-RUN python3 -m venv /opt/mangasek \
-    && /opt/mangasek/bin/pip install --no-cache-dir /tmp/mangasekdownloader \
-    && rm -rf /tmp/mangasekdownloader
+COPY --from=pugotidownloader . /tmp/pugotidownloader
+RUN python3 -m venv /opt/pugoti \
+    && /opt/pugoti/bin/pip install --no-cache-dir /tmp/pugotidownloader \
+    && rm -rf /tmp/pugotidownloader
 
 COPY --from=build /app/dist ./dist
 COPY public ./public

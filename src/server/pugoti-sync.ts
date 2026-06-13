@@ -134,11 +134,11 @@ export function canSyncLibrary(library: Library): boolean {
   return !library.isPersonal && syncableLibraryKinds.has(library.kind);
 }
 
-export function getMangasekSyncStatus(): SyncStatus {
+export function getPugotiSyncStatus(): SyncStatus {
   return { ...syncStatus };
 }
 
-export async function startMangasekSync(
+export async function startPugotiSync(
   library: Library,
   content: ContentItem | null,
   onSuccess: () => Promise<void>
@@ -167,9 +167,9 @@ export async function startMangasekSync(
     startedAt: new Date().toISOString()
   };
 
-  const child = spawn(config.mangasekCommand, args, {
+  const child = spawn(config.pugotiCommand, args, {
     cwd: library.path,
-    env: { ...process.env, MANGASEK_PROGRESS: "1" },
+    env: { ...process.env, PUGOTI_PROGRESS: "1" },
     stdio: ["ignore", "pipe", "pipe"]
   });
   const stdoutRemainder = { value: "" };
@@ -184,7 +184,7 @@ export async function startMangasekSync(
   const timeout = setTimeout(() => {
     child.kill("SIGTERM");
     syncStatus.message = "O sincronizador excedeu o tempo limite.";
-  }, config.mangasekTimeoutMs);
+  }, config.pugotiTimeoutMs);
 
   const fail = (message: string): void => {
     if (settled) {
@@ -199,7 +199,7 @@ export async function startMangasekSync(
 
   child.on("error", (error) => {
     fail((error as NodeJS.ErrnoException).code === "ENOENT"
-      ? "Executável do mangasekdownloader não foi encontrado no servidor."
+      ? "Executável do Pugotidownloader não foi encontrado no servidor."
       : error.message);
   });
   child.on("close", (code, signal) => {
@@ -230,5 +230,5 @@ export async function startMangasekSync(
       });
   });
 
-  return getMangasekSyncStatus();
+  return getPugotiSyncStatus();
 }

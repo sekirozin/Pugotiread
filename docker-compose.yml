@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       additional_contexts:
-        mangasekdownloader: ../mangasekdownloader
+        pugotidownloader: ../Pugotidownloader
     container_name: pugotiread
     ports:
       - "8099:8099"
@@ -17,7 +17,7 @@ services:
       CACHE_DIR: "/app/data/cache"
       MEDIA_ROOT: "/media"
       VAULT_MEDIA_ROOT: "/media/Cofre"
-      MANGASEK_COMMAND: "/opt/mangasek/bin/mgk"
+      PUGOTI_COMMAND: "/opt/pugoti/bin/pugoti"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
       - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media

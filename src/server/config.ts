@@ -75,6 +75,9 @@ export const config = {
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPass: process.env.SMTP_PASS ?? "",
   smtpFrom: process.env.SMTP_FROM ?? "Pugotiread <no-reply@localhost>",
-  mangasekCommand: process.env.MANGASEK_COMMAND ?? "mgk",
-  mangasekTimeoutMs: readPositiveNumber(process.env.MANGASEK_TIMEOUT_MS, 30 * 60 * 1000)
+  pugotiCommand: process.env.PUGOTI_COMMAND ?? process.env.MANGASEK_COMMAND ?? "pugoti",
+  pugotiTimeoutMs: readPositiveNumber(
+    process.env.PUGOTI_TIMEOUT_MS ?? process.env.MANGASEK_TIMEOUT_MS,
+    30 * 60 * 1000
+  )
 };

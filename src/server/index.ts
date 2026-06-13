@@ -7,7 +7,7 @@ import { config } from "./config.js";
 import { cacheService } from "./cache.js";
 import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
-import { canSyncLibrary, getMangasekSyncStatus, startMangasekSync } from "./mangasek-sync.js";
+import { canSyncLibrary, getPugotiSyncStatus, startPugotiSync } from "./pugoti-sync.js";
 import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary } from "./media.js";
 import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
 import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
@@ -893,7 +893,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       sendJson(res, 403, { error: "Apenas administradores podem acompanhar sincronizações." });
       return;
     }
-    sendJson(res, 200, { sync: getMangasekSyncStatus() });
+    sendJson(res, 200, { sync: getPugotiSyncStatus() });
     return;
   }
 
@@ -926,7 +926,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     try {
-      const sync = await startMangasekSync(library, content, async () => {
+      const sync = await startPugotiSync(library, content, async () => {
         await invalidateLibraryScanCache(library.id);
         await scanLibrary(library);
         await store.markLibraryScanned(library.id, new Date().toISOString());
