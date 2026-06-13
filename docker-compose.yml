@@ -1,6 +1,10 @@
 services:
   pugotiread:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        mangasekdownloader: ../mangasekdownloader
     container_name: pugotiread
     ports:
       - "8099:8099"
@@ -13,9 +17,10 @@ services:
       CACHE_DIR: "/app/data/cache"
       MEDIA_ROOT: "/media"
       VAULT_MEDIA_ROOT: "/media/Cofre"
+      MANGASEK_COMMAND: "/opt/mangasek/bin/mgk"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
-      - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media:ro
+      - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || '8099') + '/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s

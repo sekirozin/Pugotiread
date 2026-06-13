@@ -29,6 +29,24 @@ export type PeopleUser = PublicUser & {
 export type { ReaderMode };
 export type FittingMode = ReaderFittingMode;
 
+export type SyncStatus = {
+  state: "idle" | "running" | "completed" | "error";
+  target: string;
+  libraryId: string | null;
+  contentId: string | null;
+  percent: number;
+  currentChapter: number;
+  totalChapters: number;
+  currentPage: number;
+  totalPages: number;
+  currentLabel: string;
+  currentWork: number;
+  totalWorks: number;
+  message: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
 export type AppState = {
   user: PublicUser | null;
   libraries: Library[];
@@ -55,7 +73,7 @@ export type AppState = {
     | "profile"
     | "settings";
   settingsSection: "account" | "server";
-  serverSection: "libraries" | "users" | "vault" | "reading";
+  serverSection: "libraries" | "sync" | "users" | "vault" | "reading";
   accountMenuOpen: boolean;
   statsMenuOpen: boolean;
   openLibraryMenuId: string | null;
@@ -79,6 +97,12 @@ export type AppState = {
   peopleShareError: string;
   activePeopleUserId: string | null;
   scanMessage: string;
+  syncLibraryId: string;
+  syncContentId: string;
+  syncRunning: boolean;
+  syncMessage: string;
+  syncError: string;
+  syncStatus: SyncStatus | null;
   libraryModalStep: "general" | "folder" | "cover" | "advanced";
   libraryDraft: {
     name: string;

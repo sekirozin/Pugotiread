@@ -628,6 +628,41 @@ button {
   white-space: nowrap;
 }
 
+.sync-stats {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.sync-stats-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.84rem;
+}
+
+.sync-stats progress {
+  width: 100%;
+  height: 9px;
+  accent-color: var(--brand);
+}
+
+.sync-stats p,
+.sync-stats-result {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.sync-stats-result {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
 .avatar {
   display: grid;
   width: 26px;

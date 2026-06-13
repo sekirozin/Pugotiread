@@ -21,7 +21,7 @@ function formatDuration(milliseconds: number): string {
   return `${minutes}min`;
 }
 
-function renderStatsMenu(): string {
+export function renderStatsMenu(): string {
   const user = state.user;
   const sessionStartedAt = user?.lastActiveAt ? new Date(user.lastActiveAt) : null;
   const validSessionStart = sessionStartedAt && !Number.isNaN(sessionStartedAt.getTime()) ? sessionStartedAt : null;
@@ -29,6 +29,14 @@ function renderStatsMenu(): string {
   const libraryAccessLabel = user?.role === "admin"
     ? `${state.libraries.length} bibliotecas públicas`
     : `${user?.allowedLibraryIds.length ?? 0} bibliotecas liberadas`;
+  const sync = user?.role === "admin" ? state.syncStatus : null;
+  const syncLabel = sync?.state === "running"
+    ? `${sync.percent}%`
+    : sync?.state === "completed"
+      ? "Concluída"
+      : sync?.state === "error"
+        ? "Erro"
+        : "Parada";
 
   return `
     <div class="stats-menu" role="dialog" aria-label="Estatísticas da sessão">
@@ -43,7 +51,31 @@ function renderStatsMenu(): string {
         <strong>${escapeHtml(validSessionStart ? validSessionStart.toLocaleString("pt-BR") : "Não registrada")}</strong>
         <span>Acesso</span>
         <strong>${escapeHtml(libraryAccessLabel)}</strong>
+        ${
+          sync
+            ? `
+              <span>Sincronização</span>
+              <strong>${escapeHtml(syncLabel)}</strong>
+            `
+            : ""
+        }
       </div>
+      ${
+        sync?.state === "running"
+          ? `
+            <div class="sync-stats">
+              <div class="sync-stats-heading">
+                <strong>${escapeHtml(sync.target)}</strong>
+                <span>${sync.percent}%</span>
+              </div>
+              <progress max="100" value="${sync.percent}">${sync.percent}%</progress>
+              <p>${escapeHtml(sync.message)}</p>
+            </div>
+          `
+          : sync && sync.state !== "idle"
+            ? `<p class="sync-stats-result ${sync.state === "error" ? "error" : ""}">${escapeHtml(sync.message)}</p>`
+            : ""
+      }
     </div>
   `;
 }

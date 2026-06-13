@@ -12,12 +12,12 @@ import type {
 import { renderIcon, renderSidebarIcon } from "./components/icons.js";
 import { renderAvatar } from "./components/avatar.js";
 import { renderSidebar } from "./components/layout/sidebar.js";
-import { renderTopbar } from "./components/layout/topbar.js";
+import { renderStatsMenu, renderTopbar } from "./components/layout/topbar.js";
 import { renderSeriesCard } from "./components/series-card.js";
 import { api } from "./services/api.js";
 import { filterContents, normalizeText, parseSearch } from "./services/search.js";
 import { state } from "./state/store.js";
-import type { AppState, FittingMode, GoogleAccounts, GoogleConfig, PeopleUser, ReaderMode, UserCollection } from "./state/types.js";
+import type { AppState, FittingMode, GoogleAccounts, GoogleConfig, PeopleUser, ReaderMode, SyncStatus, UserCollection } from "./state/types.js";
 import { renderHomeView } from "./views/home.js";
 import { renderLibraryView } from "./views/library.js";
 import { renderContentListView, renderEmptyMedia, renderNoSearchResults, renderPlaceholderView } from "./views/shared.js";
@@ -27,6 +27,8 @@ let lastVaultTouchAt = 0;
 let vaultTouchInFlight = false;
 let libraryLoadRequestId = 0;
 let passwordResetTokenPath = "";
+let syncStatusTimer: number | null = null;
+let lastAppliedSyncFinishedAt = "";
 
 const libraryOnlyKinds = new Set<LibraryKind>(["book", "lightNovel"]);
 
@@ -292,6 +294,7 @@ async function boot(): Promise<void> {
     }
     renderLoadingScreen();
     await loadHome();
+    startSyncStatusPolling();
   } catch {
     try {
       const setup = await api<{ setupRequired: boolean }>("/api/setup/status");
@@ -1264,6 +1267,8 @@ function getSettingsSectionTitle(): string {
     account: "Conta",
     server: state.serverSection === "users"
       ? "Usuários"
+      : state.serverSection === "sync"
+        ? "Sincronizar"
       : state.serverSection === "vault"
         ? "Cofre pessoal"
         : state.serverSection === "reading"
@@ -1280,6 +1285,7 @@ function renderSettingsSection(): string {
       return `<p class="empty">Esta área é exclusiva para administradores.</p>`;
     }
     if (state.serverSection === "users") return renderUsersSettings();
+    if (state.serverSection === "sync") return renderSyncSettings();
     if (state.serverSection === "vault") return renderVaultSettings();
     if (state.serverSection === "reading") return renderReadingModeSettings();
     return renderLibrariesSettings();
@@ -1330,6 +1336,59 @@ function renderUsersSettings(): string {
         ? `<div class="user-table">${state.adminUsers.map(renderUserRow).join("")}</div>`
         : `<p class="empty">Nenhum usuário cadastrado.</p>`
     }
+  `;
+}
+
+function renderSyncSettings(): string {
+  const libraries = state.libraries.filter((library) =>
+    ["manga", "manhwa", "comic", "other"].includes(library.kind)
+  );
+  const selectedLibraryId = libraries.some((library) => library.id === state.syncLibraryId)
+    ? state.syncLibraryId
+    : libraries[0]?.id ?? "";
+  state.syncLibraryId = selectedLibraryId;
+  const contents = state.homeContents
+    .filter((content) => content.libraryId === selectedLibraryId)
+    .sort((left, right) => left.title.localeCompare(right.title, "pt-BR", { numeric: true }));
+  if (state.syncContentId && !contents.some((content) => content.id === state.syncContentId)) {
+    state.syncContentId = "";
+  }
+
+  return `
+    <form class="settings-panel" id="sync-settings-form">
+      <p class="settings-lead">Baixe capítulos novos de todas as obras de uma biblioteca ou de uma obra específica.</p>
+      ${
+        libraries.length
+          ? `
+            <label class="form-row">
+              <span>Biblioteca</span>
+              <select class="input" id="sync-library-select" name="libraryId" ${state.syncRunning ? "disabled" : ""}>
+                ${libraries.map((library) => `
+                  <option value="${escapeHtml(library.id)}" ${library.id === selectedLibraryId ? "selected" : ""}>${escapeHtml(library.name)}</option>
+                `).join("")}
+              </select>
+            </label>
+            <label class="form-row">
+              <span>Obra</span>
+              <select class="input" name="contentId" ${state.syncRunning ? "disabled" : ""}>
+                <option value="">Todas as obras</option>
+                ${contents.map((content) => `
+                  <option value="${escapeHtml(content.id)}" ${content.id === state.syncContentId ? "selected" : ""}>${escapeHtml(content.title)}</option>
+                `).join("")}
+              </select>
+            </label>
+            <p class="modal-help">Somente obras com <code>manga_url.txt</code> são processadas pelo sincronizador.</p>
+            ${state.syncError ? `<p class="error">${escapeHtml(state.syncError)}</p>` : ""}
+            ${state.syncMessage ? `<p class="scan-message">${escapeHtml(state.syncMessage)}</p>` : ""}
+            <div class="settings-actions">
+              <button class="button" type="submit" ${state.syncRunning ? "disabled" : ""}>
+                ${state.syncRunning ? "Sincronizando..." : "Sincronizar"}
+              </button>
+            </div>
+          `
+          : `<p class="empty">Nenhuma biblioteca compatível com sincronização foi cadastrada.</p>`
+      }
+    </form>
   `;
 }
 
@@ -2227,6 +2286,62 @@ async function refreshLibraries(): Promise<void> {
   state.readingNowContents = await loadLibraryContents(libraries);
 }
 
+function updateStatsMenu(): void {
+  if (!state.statsMenuOpen) {
+    return;
+  }
+  const current = document.querySelector(".stats-menu");
+  if (current) {
+    current.outerHTML = renderStatsMenu();
+  }
+}
+
+async function refreshSyncStatus(): Promise<void> {
+  if (state.user?.role !== "admin") {
+    return;
+  }
+
+  try {
+    const { sync } = await api<{ sync: SyncStatus }>("/api/admin/sync/status");
+    state.syncStatus = sync;
+    state.syncRunning = sync.state === "running";
+    updateStatsMenu();
+
+    if (
+      sync.finishedAt &&
+      sync.finishedAt !== lastAppliedSyncFinishedAt &&
+      (sync.state === "completed" || sync.state === "error")
+    ) {
+      lastAppliedSyncFinishedAt = sync.finishedAt;
+      state.syncMessage = sync.state === "completed" ? sync.message : "";
+      state.syncError = sync.state === "error" ? sync.message : "";
+      state.scanMessage = sync.message;
+      if (sync.state === "completed") {
+        await refreshLibraries();
+        if (state.activeLibraryId === sync.libraryId) {
+          const { contents } = await api<{ contents: ContentItem[] }>(
+            `/api/libraries/${encodeURIComponent(sync.libraryId ?? "")}/contents`
+          );
+          state.contents = contents;
+        }
+      }
+      renderShell();
+    }
+  } catch {
+    // Status polling must not interrupt reading or other navigation.
+  }
+}
+
+function startSyncStatusPolling(): void {
+  if (state.user?.role !== "admin" || syncStatusTimer !== null) {
+    return;
+  }
+  void refreshSyncStatus();
+  syncStatusTimer = window.setInterval(() => {
+    void refreshSyncStatus();
+  }, 1500);
+}
+
 async function refreshPersonalVault(): Promise<void> {
   if (!state.vaultUnlocked) {
     return;
@@ -2478,6 +2593,44 @@ async function scanLibraryById(libraryId: string): Promise<void> {
     state.scanMessage = error instanceof Error ? error.message : "Não foi possível escanear a biblioteca.";
     renderShell();
   }
+}
+
+async function synchronizeLibrary(form: HTMLFormElement): Promise<void> {
+  if (state.syncRunning) {
+    return;
+  }
+
+  const formData = new FormData(form);
+  const libraryId = String(formData.get("libraryId") ?? "");
+  const contentId = String(formData.get("contentId") ?? "");
+  const library = state.libraries.find((item) => item.id === libraryId);
+  const content = state.homeContents.find((item) => item.id === contentId);
+  state.syncLibraryId = libraryId;
+  state.syncContentId = contentId;
+  state.syncRunning = true;
+  state.syncError = "";
+  state.syncMessage = content
+    ? `Sincronizando ${content.title}...`
+    : `Sincronizando todas as obras de ${library?.name ?? "biblioteca"}...`;
+  renderShell();
+
+  try {
+    const { sync } = await api<{ sync: SyncStatus }>(
+      "/api/admin/sync",
+      {
+        method: "POST",
+        body: JSON.stringify({ libraryId, contentId: contentId || null })
+      }
+    );
+    state.syncStatus = sync;
+    state.syncRunning = true;
+    state.syncMessage = `${sync.target}: sincronização iniciada em segundo plano.`;
+  } catch (error) {
+    state.syncRunning = false;
+    state.syncMessage = "";
+    state.syncError = error instanceof Error ? error.message : "Não foi possível sincronizar.";
+  }
+  renderShell();
 }
 
 function closeLibraryModal(): void {
@@ -3704,14 +3857,18 @@ function bindShellEvents(): void {
     renderShell();
   });
 
-  document.querySelector("#account-button")?.addEventListener("click", () => {
+  document.querySelector("#account-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     state.statsMenuOpen = false;
     state.accountMenuOpen = !state.accountMenuOpen;
     closeMobileNavigation();
     renderShell();
   });
 
-  document.querySelector("#stats-button")?.addEventListener("click", () => {
+  document.querySelector("#stats-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     state.accountMenuOpen = false;
     state.statsMenuOpen = !state.statsMenuOpen;
     closeMobileNavigation();
@@ -4230,6 +4387,19 @@ function bindShellEvents(): void {
     void saveVaultSettings(event.currentTarget as HTMLFormElement);
   });
 
+  document.querySelector("#sync-library-select")?.addEventListener("change", (event) => {
+    state.syncLibraryId = (event.target as HTMLSelectElement).value;
+    state.syncContentId = "";
+    state.syncMessage = "";
+    state.syncError = "";
+    renderShell();
+  });
+
+  document.querySelector("#sync-settings-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void synchronizeLibrary(event.currentTarget as HTMLFormElement);
+  });
+
   document.querySelector("#reading-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveReadingModeSettings(event.currentTarget as HTMLFormElement);
@@ -4429,6 +4599,14 @@ function bindShellEvents(): void {
       event.preventDefault();
       event.stopPropagation();
       void scanSeries(button.dataset.seriesScan ?? "");
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-series-sync]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void synchronizeSeries(button.dataset.seriesSync ?? "");
     });
   });
 
@@ -5012,6 +5190,44 @@ async function scanSeries(contentId: string): Promise<void> {
     state.scanMessage = error instanceof Error ? error.message : "Não foi possível escanear a série.";
     renderShell();
   }
+}
+
+async function synchronizeSeries(contentId: string): Promise<void> {
+  if (state.syncRunning || state.user?.role !== "admin") {
+    return;
+  }
+
+  const content = findContentById(contentId);
+  if (!content) {
+    return;
+  }
+
+  state.syncRunning = true;
+  state.scanMessage = `Sincronizando ${content.title}...`;
+  state.openSeriesMenuId = null;
+  state.openSeriesAddMenuId = null;
+  state.openSeriesRemoveMenuId = null;
+  renderShell();
+
+  try {
+    const { sync } = await api<{ sync: SyncStatus }>(
+      "/api/admin/sync",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          libraryId: content.libraryId,
+          contentId: content.id
+        })
+      }
+    );
+    state.syncStatus = sync;
+    state.syncRunning = true;
+    state.scanMessage = `${sync.target}: sincronização iniciada em segundo plano.`;
+  } catch (error) {
+    state.syncRunning = false;
+    state.scanMessage = error instanceof Error ? error.message : "Não foi possível sincronizar a obra.";
+  }
+  renderShell();
 }
 
 function getContentsByIds(contentIds: string[]): ContentItem[] {

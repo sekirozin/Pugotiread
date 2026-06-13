@@ -50,6 +50,12 @@ export const state: AppState = {
   peopleShareError: "",
   activePeopleUserId: null,
   scanMessage: "",
+  syncLibraryId: "",
+  syncContentId: "",
+  syncRunning: false,
+  syncMessage: "",
+  syncError: "",
+  syncStatus: null,
   libraryModalStep: "general",
   libraryDraft: {
     name: "",

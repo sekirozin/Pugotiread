@@ -119,6 +119,7 @@ function renderSettingsSidebar(): string {
             <div class="settings-group">
               <h3>Servidor</h3>
               ${renderServerSectionButton("libraries", "Bibliotecas")}
+              ${renderServerSectionButton("sync", "Sincronizar")}
               ${renderServerSectionButton("users", "Usuários")}
               ${renderServerSectionButton("reading", "Modo de leitura")}
               ${renderServerSectionButton("vault", "Cofre pessoal")}

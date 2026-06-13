@@ -14,7 +14,7 @@ RUN npm run build
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
-RUN apk add --no-cache python3 make g++ unzip
+RUN apk add --no-cache python3 py3-pip make g++ unzip
 ENV NODE_ENV=production
 ENV PORT=8099
 ENV DATA_FILE=/app/data/store.json
@@ -23,9 +23,15 @@ ENV CACHE_DIR=/app/data/cache
 ENV PUBLIC_DIR=/app/public
 ENV CLIENT_DIR=/app/dist/client
 ENV MEDIA_ROOT=/media
+ENV MANGASEK_COMMAND=/opt/mangasek/bin/mgk
 
 COPY package*.json ./
 RUN npm install --omit=dev
+
+COPY --from=mangasekdownloader . /tmp/mangasekdownloader
+RUN python3 -m venv /opt/mangasek \
+    && /opt/mangasek/bin/pip install --no-cache-dir /tmp/mangasekdownloader \
+    && rm -rf /tmp/mangasekdownloader
 
 COPY --from=build /app/dist ./dist
 COPY public ./public

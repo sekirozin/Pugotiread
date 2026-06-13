@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { cacheService } from "./cache.js";
 import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
+import { canSyncLibrary, getMangasekSyncStatus, startMangasekSync } from "./mangasek-sync.js";
 import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary } from "./media.js";
 import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
 import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
@@ -884,6 +885,57 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       readingDefaults: body.readingDefaults === undefined ? undefined : normalizeReadingDefaults(body.readingDefaults)
     });
     sendJson(res, 200, { settings });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/sync/status" && req.method === "GET") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem acompanhar sincronizações." });
+      return;
+    }
+    sendJson(res, 200, { sync: getMangasekSyncStatus() });
+    return;
+  }
+
+  if (url.pathname === "/api/admin/sync" && req.method === "POST") {
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Apenas administradores podem sincronizar bibliotecas." });
+      return;
+    }
+
+    const body = await readJson<{ libraryId?: string; contentId?: string | null }>(req);
+    const data = await store.read();
+    const library = data.libraries.find((item) => item.id === body.libraryId && !item.isPersonal);
+    if (!library) {
+      sendJson(res, 404, { error: "Biblioteca não encontrada." });
+      return;
+    }
+    if (!canSyncLibrary(library)) {
+      sendJson(res, 400, { error: "Este tipo de biblioteca não participa da sincronização." });
+      return;
+    }
+
+    await invalidateLibraryScanCache(library.id);
+    const currentContents = await scanLibrary(library);
+    const content = body.contentId
+      ? currentContents.find((item) => item.id === body.contentId) ?? null
+      : null;
+    if (body.contentId && !content) {
+      sendJson(res, 404, { error: "Obra não encontrada na biblioteca selecionada." });
+      return;
+    }
+
+    try {
+      const sync = await startMangasekSync(library, content, async () => {
+        await invalidateLibraryScanCache(library.id);
+        await scanLibrary(library);
+        await store.markLibraryScanned(library.id, new Date().toISOString());
+      });
+      sendJson(res, 202, { sync });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível sincronizar a biblioteca.";
+      sendJson(res, message === "Já existe uma sincronização em andamento." ? 409 : 500, { error: message });
+    }
     return;
   }
 

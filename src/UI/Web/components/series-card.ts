@@ -92,6 +92,10 @@ export function renderSeriesCard(content: ContentItem, cardKey = content.id): st
 function renderSeriesContextMenu(content: ContentItem, cardKey: string): string {
   const addMenuOpen = state.openSeriesAddMenuId === cardKey;
   const removeMenuOpen = state.openSeriesRemoveMenuId === cardKey;
+  const library = state.libraries.find((item) => item.id === content.libraryId);
+  const canSync =
+    state.user?.role === "admin" &&
+    Boolean(library && !library.isPersonal && ["manga", "manhwa", "comic", "other"].includes(library.kind));
   return `
     <div class="series-context-menu" role="menu" aria-label="Opções de ${escapeHtml(content.title)}">
       <button class="series-menu-item has-submenu" data-series-add-menu-key="${escapeHtml(cardKey)}" type="button" role="menuitem" aria-expanded="${addMenuOpen}">
@@ -107,6 +111,7 @@ function renderSeriesContextMenu(content: ContentItem, cardKey: string): string 
       <button class="series-menu-item" data-series-mark-read="${content.id}" type="button" role="menuitem">Marcar como lido</button>
       <button class="series-menu-item" data-series-mark-unread="${content.id}" type="button" role="menuitem">Marcar como não lido</button>
       <button class="series-menu-item" data-series-scan="${content.id}" type="button" role="menuitem">Escanear série</button>
+      ${canSync ? `<button class="series-menu-item" data-series-sync="${content.id}" type="button" role="menuitem">Sincronizar obra</button>` : ""}
     </div>
   `;
 }

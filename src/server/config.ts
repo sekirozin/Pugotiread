@@ -44,6 +44,11 @@ const envFileValues = {
   ...parseEnvFile(path.join(projectRoot, ".env.local"))
 };
 
+function readPositiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 for (const [key, value] of Object.entries(envFileValues)) {
   if (process.env[key] === undefined) {
     process.env[key] = value;
@@ -69,5 +74,7 @@ export const config = {
   smtpSecure: process.env.SMTP_SECURE === "true",
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPass: process.env.SMTP_PASS ?? "",
-  smtpFrom: process.env.SMTP_FROM ?? "Pugotiread <no-reply@localhost>"
+  smtpFrom: process.env.SMTP_FROM ?? "Pugotiread <no-reply@localhost>",
+  mangasekCommand: process.env.MANGASEK_COMMAND ?? "mgk",
+  mangasekTimeoutMs: readPositiveNumber(process.env.MANGASEK_TIMEOUT_MS, 30 * 60 * 1000)
 };
