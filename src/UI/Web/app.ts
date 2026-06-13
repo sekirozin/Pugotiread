@@ -4116,11 +4116,13 @@ function bindShellEvents(): void {
     updateProfileFavoriteResults();
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-add-profile-favorite]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      addProfileFavorite(button.dataset.addProfileFavorite ?? "");
-    });
+  document.querySelector("#profile-favorite-results")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-add-profile-favorite]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    addProfileFavorite(button.dataset.addProfileFavorite ?? "");
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-remove-profile-favorite]").forEach((button) => {
