@@ -43,6 +43,19 @@ type GoogleTokenPayload = {
 
 let googleKeyCache: { expiresAt: number; keys: GoogleJwk[] } | null = null;
 
+type PugotilabProfileResponse = {
+  authenticated?: boolean;
+  profile?: {
+    username: string;
+    displayName?: string;
+    nickname?: string;
+    avatarUrl?: string;
+    biography?: string;
+    location?: string;
+    role?: "admin" | "user";
+  };
+};
+
 function decodeBase64UrlJson<T>(value: string): T {
   return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as T;
 }
@@ -168,10 +181,113 @@ export function getCookie(req: IncomingMessage, name: string): string | null {
   return null;
 }
 
-export async function getCurrentUser(req: IncomingMessage): Promise<User | null> {
-  const token = getCookie(req, "pugotiread_session");
+function makeUserId(base: string, existingUsers: User[]): string {
+  const normalized = base.trim().toLowerCase() || "user";
+  let next = normalized;
+  let counter = 2;
+
+  while (existingUsers.some((user) => user.id === next)) {
+    next = `${normalized}-${counter}`;
+    counter += 1;
+  }
+
+  return next;
+}
+
+async function syncPugotilabSession(req: IncomingMessage, res?: ServerResponse): Promise<User | null> {
+  const token = getCookie(req, "pugotilab_session");
   if (!token) {
     return null;
+  }
+
+  try {
+    const response = await fetch(config.pugotilabProfileUrl, {
+      headers: {
+        Cookie: `pugotilab_session=${encodeURIComponent(token)}`
+      }
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as PugotilabProfileResponse;
+    const profile = payload.profile;
+    if (!profile?.username) {
+      return null;
+    }
+
+    const username = profile.username.trim().toLowerCase();
+    const displayName = (profile.displayName || profile.username).trim() || profile.username;
+    const avatarUrl = profile.avatarUrl || "";
+    const nickname = profile.nickname || "";
+    const biography = profile.biography || "";
+    const location = profile.location || "";
+    const role = profile.role === "admin" ? "admin" : "user";
+    const now = new Date().toISOString();
+    const data = await store.read();
+    const existing = data.users.find((user) => user.username.toLowerCase() === username) ?? null;
+
+    let user: User;
+    if (existing) {
+      user = {
+        ...existing,
+        username,
+        displayName,
+        avatarUrl,
+        nickname,
+        biography,
+        location,
+        role,
+        lastActiveAt: now,
+        canLogin: false
+      };
+      await store.updateUser(existing.id, {
+        username,
+        displayName,
+        avatarUrl,
+        nickname,
+        biography,
+        location,
+        role,
+        canLogin: false
+      });
+    } else {
+      user = {
+        id: makeUserId(username, data.users),
+        username,
+        displayName,
+        email: "",
+        avatarUrl,
+        nickname,
+        biography,
+        location,
+        favoriteContentIds: [],
+        canLogin: false,
+        canDownload: true,
+        canChangePassword: false,
+        passwordChangeRequiresEmailConfirmation: false,
+        lastActiveAt: now,
+        role,
+        passwordHash: hashPassword(crypto.randomUUID()),
+        allowedLibraryIds: []
+      };
+      await store.createUser(user);
+    }
+
+    if (res) {
+      setSessionCookie(res, createSessionToken(user.id));
+    }
+
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCurrentUser(req: IncomingMessage, res?: ServerResponse): Promise<User | null> {
+  const token = getCookie(req, "pugotiread_session");
+  if (!token) {
+    return syncPugotilabSession(req, res);
   }
 
   const [encodedPayload, signature] = token.split(".");
@@ -197,11 +313,11 @@ export async function getCurrentUser(req: IncomingMessage): Promise<User | null>
   const data = await store.read();
   const found = data.users.find((user) => user.id === userId) ?? null;
   if (!found) {
-    return null;
+    return syncPugotilabSession(req, res);
   }
 
   if (found.role === "admin" && !isPasswordHashReady(found.passwordHash)) {
-    return null;
+    return syncPugotilabSession(req, res);
   }
 
   return found;

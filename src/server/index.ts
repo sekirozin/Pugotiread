@@ -351,7 +351,7 @@ async function readMediaDirectory(requestedPath: string): Promise<{ path: string
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const user = await getCurrentUser(req);
+  const user = await getCurrentUser(req, res);
 
   if (url.pathname === "/api/setup/status" && req.method === "GET") {
     const data = await store.read();

@@ -11,6 +11,7 @@ services:
     environment:
       PORT: "8099"
       SESSION_SECRET: "troque-este-segredo-no-zimaos"
+      PUGOTILAB_PROFILE_URL: "http://pugotilab-auth:8080/auth/api/profile"
       GOOGLE_CLIENT_ID: "684109969699-ugf51n6innd2ci9i0vidh2n9p5nf5s4r.apps.googleusercontent.com"
       DATA_FILE: "/app/data/store.json"
       DB_FILE: "/app/data/store.db"
@@ -21,6 +22,9 @@ services:
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
       - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media
+    networks:
+      - default
+      - pugotilab
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || '8099') + '/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
@@ -43,3 +47,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+
+networks:
+  pugotilab:
+    external: true

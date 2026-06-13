@@ -67,6 +67,7 @@ export const config = {
   clientDir: process.env.CLIENT_DIR ?? path.join(projectRoot, "dist/client"),
   mediaRoot: process.env.MEDIA_ROOT ?? path.join(projectRoot, "media"),
   vaultMediaRoot: process.env.VAULT_MEDIA_ROOT ?? path.join(projectRoot, "media/cofre"),
+  pugotilabProfileUrl: process.env.PUGOTILAB_PROFILE_URL ?? "http://pugotilab-auth:8080/auth/api/profile",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   cacheDir: process.env.CACHE_DIR ?? path.join(projectRoot, "data/cache"),
   smtpHost: process.env.SMTP_HOST ?? "",
