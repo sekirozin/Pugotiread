@@ -694,7 +694,6 @@ function renderShell() {
       </aside>
       ${mobileNavOpen ? `<button class="mobile-nav-backdrop" id="mobile-nav-backdrop" type="button" aria-label="Fechar menu"></button>` : ""}
       <main class="main">
-        ${state.scanMessage ? `<p class="scan-message global-scan-message">${escapeHtml(state.scanMessage)}</p>` : ""}
         ${state.reader
         ? renderReader(state.reader.content, state.reader.page, state.reader.mode)
         : renderMainView(activeLibrary, filtered, activeSeries)}

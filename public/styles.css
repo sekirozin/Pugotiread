@@ -922,11 +922,6 @@ button {
   padding: 38px 18px 40px;
 }
 
-.global-scan-message {
-  margin-top: 0;
-  margin-bottom: 14px;
-}
-
 .section-heading {
   display: flex;
   align-items: end;
