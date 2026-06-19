@@ -21,6 +21,14 @@ function formatDuration(milliseconds: number): string {
   return `${minutes}min`;
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return "Nunca";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Não registrada" : date.toLocaleString("pt-BR");
+}
+
 export function renderStatsMenu(): string {
   const user = state.user;
   const sessionStartedAt = user?.lastActiveAt ? new Date(user.lastActiveAt) : null;
@@ -56,6 +64,8 @@ export function renderStatsMenu(): string {
             ? `
               <span>Sincronização</span>
               <strong>${escapeHtml(syncLabel)}</strong>
+              <span>Última sincronização</span>
+              <strong title="${escapeHtml(sync.lastSyncTarget)}">${escapeHtml(formatDateTime(sync.lastSyncAt))}</strong>
             `
             : ""
         }

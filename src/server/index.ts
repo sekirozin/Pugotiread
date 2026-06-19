@@ -118,6 +118,53 @@ function parseContentEpubAssetPath(pathname: string): { contentId: string; asset
   };
 }
 
+function waitForSyncCompletion(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (getPugotiSyncStatus().state !== "running") {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 1000);
+  });
+}
+
+let automaticSyncCycleRunning = false;
+
+async function runAutomaticSyncCycle(): Promise<void> {
+  if (automaticSyncCycleRunning || getPugotiSyncStatus().state === "running") {
+    console.log("[SYNC] Ciclo automático ignorado: já existe uma sincronização em andamento.");
+    return;
+  }
+
+  automaticSyncCycleRunning = true;
+  try {
+    const data = await store.read();
+    const libraries = data.libraries.filter(canSyncLibrary);
+    console.log(`[SYNC] Iniciando ciclo automático de ${libraries.length} biblioteca(s).`);
+
+    for (const library of libraries) {
+      try {
+        await startPugotiSync(library, null, async () => {
+          await invalidateLibraryScanCache(library.id);
+          await scanLibrary(library);
+          await store.markLibraryScanned(library.id, new Date().toISOString());
+        }, "automatic");
+        await waitForSyncCompletion();
+
+        const status = getPugotiSyncStatus();
+        console.log(`[SYNC] ${library.name}: ${status.state} - ${status.message}`);
+      } catch (error) {
+        console.error(`[SYNC] ${library.name}:`, error);
+      }
+    }
+
+    console.log("[SYNC] Ciclo automático finalizado.");
+  } finally {
+    automaticSyncCycleRunning = false;
+  }
+}
+
 function parseContentCoverPath(pathname: string): { contentId: string } | null {
   const match = pathname.match(/^\/api\/contents\/(.+)\/cover$/);
   if (!match) {
@@ -1806,4 +1853,19 @@ server.listen(config.port, () => {
     console.warn("[SMTP] SMTP_HOST nao configurado. Recuperacao de senha vai cair no console.");
   }
   console.log(`Pugotiread rodando em http://localhost:${config.port}`);
+
+  if (config.pugotiAutoSyncEnabled) {
+    console.log(`[SYNC] Sincronização automática ativa a cada ${Math.round(config.pugotiSyncIntervalMs / 60000)} minutos.`);
+    const initialTimer = setTimeout(() => {
+      void runAutomaticSyncCycle();
+    }, 60 * 1000);
+    initialTimer.unref();
+
+    const interval = setInterval(() => {
+      void runAutomaticSyncCycle();
+    }, config.pugotiSyncIntervalMs);
+    interval.unref();
+  } else {
+    console.log("[SYNC] Sincronização automática desativada.");
+  }
 });

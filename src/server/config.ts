@@ -49,6 +49,13 @@ function readPositiveNumber(value: string | undefined, fallback: number): number
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function readBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  return value.toLowerCase() !== "false" && value !== "0";
+}
+
 for (const [key, value] of Object.entries(envFileValues)) {
   if (process.env[key] === undefined) {
     process.env[key] = value;
@@ -80,5 +87,7 @@ export const config = {
   pugotiTimeoutMs: readPositiveNumber(
     process.env.PUGOTI_TIMEOUT_MS ?? process.env.MANGASEK_TIMEOUT_MS,
     30 * 60 * 1000
-  )
+  ),
+  pugotiAutoSyncEnabled: readBoolean(process.env.PUGOTI_AUTO_SYNC_ENABLED, true),
+  pugotiSyncIntervalMs: readPositiveNumber(process.env.PUGOTI_SYNC_INTERVAL_MS, 2 * 60 * 60 * 1000)
 };

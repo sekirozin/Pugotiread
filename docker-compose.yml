@@ -19,6 +19,8 @@ services:
       MEDIA_ROOT: "/media"
       VAULT_MEDIA_ROOT: "/media/Cofre"
       PUGOTI_COMMAND: "/opt/pugoti/bin/pugoti"
+      PUGOTI_AUTO_SYNC_ENABLED: "true"
+      PUGOTI_SYNC_INTERVAL_MS: "7200000"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
       - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media

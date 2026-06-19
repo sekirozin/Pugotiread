@@ -45,6 +45,11 @@ export type SyncStatus = {
   message: string;
   startedAt: string | null;
   finishedAt: string | null;
+  lastSyncAt: string | null;
+  lastSyncTarget: string;
+  lastSyncState: "completed" | "error" | null;
+  lastSyncMessage: string;
+  lastSyncSource: "manual" | "automatic" | null;
 };
 
 export type AppState = {

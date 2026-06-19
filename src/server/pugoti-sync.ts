@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { store } from "./store.js";
 import type { ContentItem, Library } from "../shared/types.js";
 
-const syncableLibraryKinds = new Set(["manga", "manhwa", "comic", "other"]);
+const syncableLibraryKinds = new Set(["manga", "manhwa", "comic", "lightNovel", "other"]);
 const outputLimit = 4 * 1024 * 1024;
 
 export type SyncStatus = {
@@ -23,6 +25,11 @@ export type SyncStatus = {
   message: string;
   startedAt: string | null;
   finishedAt: string | null;
+  lastSyncAt: string | null;
+  lastSyncTarget: string;
+  lastSyncState: "completed" | "error" | null;
+  lastSyncMessage: string;
+  lastSyncSource: "manual" | "automatic" | null;
   output: string;
 };
 
@@ -45,6 +52,11 @@ function createIdleStatus(): SyncStatus {
     message: "Nenhuma sincronização executada nesta sessão do servidor.",
     startedAt: null,
     finishedAt: null,
+    lastSyncAt: null,
+    lastSyncTarget: "",
+    lastSyncState: null,
+    lastSyncMessage: "",
+    lastSyncSource: null,
     output: ""
   };
 }
@@ -135,13 +147,22 @@ export function canSyncLibrary(library: Library): boolean {
 }
 
 export function getPugotiSyncStatus(): SyncStatus {
-  return { ...syncStatus };
+  const latest = store.getLatestSyncRun();
+  return {
+    ...syncStatus,
+    lastSyncAt: latest?.finishedAt ?? null,
+    lastSyncTarget: latest?.target ?? "",
+    lastSyncState: latest?.state === "completed" || latest?.state === "error" ? latest.state : null,
+    lastSyncMessage: latest?.message ?? "",
+    lastSyncSource: latest?.source ?? null
+  };
 }
 
 export async function startPugotiSync(
   library: Library,
   content: ContentItem | null,
-  onSuccess: () => Promise<void>
+  onSuccess: () => Promise<void>,
+  source: "manual" | "automatic" = "manual"
 ): Promise<SyncStatus> {
   if (!canSyncLibrary(library)) {
     throw new Error("Este tipo de biblioteca não participa da sincronização.");
@@ -155,6 +176,8 @@ export async function startPugotiSync(
     ? [targetPath, "--sync", "--output", library.path]
     : ["--all", "--sync", "--output", library.path];
   const target = content?.title ?? `Todas as obras de ${library.name}`;
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
   syncStatus = {
     ...createIdleStatus(),
     state: "running",
@@ -164,8 +187,20 @@ export async function startPugotiSync(
     currentWork: content ? 1 : 0,
     totalWorks: content ? 1 : 0,
     message: `Preparando ${target}...`,
-    startedAt: new Date().toISOString()
+    startedAt
   };
+  store.createSyncRun({
+    id: runId,
+    source,
+    state: "running",
+    target,
+    libraryId: library.id,
+    contentId: content?.id ?? null,
+    message: syncStatus.message,
+    output: "",
+    startedAt,
+    finishedAt: null
+  });
 
   const child = spawn(config.pugotiCommand, args, {
     cwd: library.path,
@@ -195,6 +230,7 @@ export async function startPugotiSync(
     syncStatus.state = "error";
     syncStatus.message = message;
     syncStatus.finishedAt = new Date().toISOString();
+    store.finishSyncRun(runId, "error", syncStatus.message, syncStatus.output, syncStatus.finishedAt);
   };
 
   child.on("error", (error) => {
@@ -224,6 +260,7 @@ export async function startPugotiSync(
         syncStatus.percent = 100;
         syncStatus.message = `${target}: sincronização concluída.`;
         syncStatus.finishedAt = new Date().toISOString();
+        store.finishSyncRun(runId, "completed", syncStatus.message, syncStatus.output, syncStatus.finishedAt);
       })
       .catch((error) => {
         fail(error instanceof Error ? error.message : "Falha ao atualizar a biblioteca.");

@@ -9,6 +9,19 @@ const libraryKinds: LibraryKind[] = ["manga", "manhwa", "book", "comic", "lightN
 const readerModes: ReaderMode[] = ["horizontal", "paged-vertical", "vertical-scroll"];
 const readerFittingModes: ReaderFittingMode[] = ["height", "width", "original"];
 
+export type SyncRun = {
+  id: string;
+  source: "manual" | "automatic";
+  state: "running" | "completed" | "error";
+  target: string;
+  libraryId: string | null;
+  contentId: string | null;
+  message: string;
+  output: string;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
 export const defaultReadingDefaults: ServerSettings["readingDefaults"] = {
   manga: { mode: "horizontal", fitting: "height", controlsVisible: false },
   manhwa: { mode: "vertical-scroll", fitting: "width", controlsVisible: false },
@@ -88,6 +101,13 @@ export class Store {
 
     this.ensureTables();
     this.ensureCompatibility();
+    this.db.prepare(`
+      UPDATE sync_runs
+      SET state = 'error',
+          message = 'Sincronização interrompida pela reinicialização do servidor.',
+          finishedAt = ?
+      WHERE state = 'running'
+    `).run(new Date().toISOString());
 
     if (!this.tryMigrateFromJson()) {
       this.seedIfEmpty();
@@ -214,6 +234,22 @@ export class Store {
         expiresAt TEXT NOT NULL,
         usedAt TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS sync_runs (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        state TEXT NOT NULL,
+        target TEXT NOT NULL,
+        libraryId TEXT,
+        contentId TEXT,
+        message TEXT NOT NULL,
+        output TEXT NOT NULL DEFAULT '',
+        startedAt TEXT NOT NULL,
+        finishedAt TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at
+        ON sync_runs(startedAt DESC);
     `);
   }
 
@@ -686,6 +722,51 @@ export class Store {
 
   async markLibraryScanned(libraryId: string, scannedAt: string): Promise<void> {
     this.db.prepare("UPDATE libraries SET lastScannedAt = ? WHERE id = ?").run(scannedAt, libraryId);
+  }
+
+  createSyncRun(run: SyncRun): void {
+    this.db.prepare(`
+      INSERT INTO sync_runs (
+        id, source, state, target, libraryId, contentId, message, output, startedAt, finishedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.id,
+      run.source,
+      run.state,
+      run.target,
+      run.libraryId,
+      run.contentId,
+      run.message,
+      run.output,
+      run.startedAt,
+      run.finishedAt
+    );
+  }
+
+  finishSyncRun(id: string, state: "completed" | "error", message: string, output: string, finishedAt: string): void {
+    this.db.prepare(`
+      UPDATE sync_runs
+      SET state = ?, message = ?, output = ?, finishedAt = ?
+      WHERE id = ?
+    `).run(state, message, output.slice(-64 * 1024), finishedAt, id);
+
+    this.db.prepare(`
+      DELETE FROM sync_runs
+      WHERE id NOT IN (
+        SELECT id FROM sync_runs ORDER BY startedAt DESC LIMIT 200
+      )
+    `).run();
+  }
+
+  getLatestSyncRun(): SyncRun | null {
+    const row = this.db.prepare(`
+      SELECT id, source, state, target, libraryId, contentId, message, output, startedAt, finishedAt
+      FROM sync_runs
+      WHERE finishedAt IS NOT NULL
+      ORDER BY startedAt DESC
+      LIMIT 1
+    `).get() as SyncRun | undefined;
+    return row ?? null;
   }
 
   async toggleBookmark(bookmark: Bookmark): Promise<{ marked: boolean }> {
