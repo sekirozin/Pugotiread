@@ -4,10 +4,12 @@ import http from "node:http";
 import path from "node:path";
 import { clearSessionCookie, createSessionToken, getCookie, getCurrentUser, hashPassword, isPasswordHashReady, setSessionCookie, toPublicUser, verifyGoogleIdToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
-import { readJson, sendFile, sendJson, sendNoContent, serveStatic } from "./http.js";
+import { cacheService } from "./cache.js";
+import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
-import { getContentCoverPath, getContentCoverThumbnail, getContentPagePath, scanLibrary } from "./media.js";
-import { normalizeVaultTimeoutMinutes, store } from "./store.js";
+import { canSyncLibrary, getPugotiSyncStatus, startPugotiSync } from "./pugoti-sync.js";
+import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary } from "./media.js";
+import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
 function isPersonalLibrary(library) {
     return Boolean(library.isPersonal);
 }
@@ -84,6 +86,58 @@ function parseContentPagePath(pathname) {
         contentId: decodeURIComponent(match[1] ?? ""),
         pageIndex: Number(match[2])
     };
+}
+function parseContentEpubAssetPath(pathname) {
+    const match = pathname.match(/^\/api\/contents\/(.+)\/epub-assets\/(.+)$/);
+    if (!match) {
+        return null;
+    }
+    return {
+        contentId: decodeURIComponent(match[1] ?? ""),
+        assetPath: (match[2] ?? "").split("/").map((part) => decodeURIComponent(part)).join("/")
+    };
+}
+function waitForSyncCompletion() {
+    return new Promise((resolve) => {
+        const timer = setInterval(() => {
+            if (getPugotiSyncStatus().state !== "running") {
+                clearInterval(timer);
+                resolve();
+            }
+        }, 1000);
+    });
+}
+let automaticSyncCycleRunning = false;
+async function runAutomaticSyncCycle() {
+    if (automaticSyncCycleRunning || getPugotiSyncStatus().state === "running") {
+        console.log("[SYNC] Ciclo automático ignorado: já existe uma sincronização em andamento.");
+        return;
+    }
+    automaticSyncCycleRunning = true;
+    try {
+        const data = await store.read();
+        const libraries = data.libraries.filter(canSyncLibrary);
+        console.log(`[SYNC] Iniciando ciclo automático de ${libraries.length} biblioteca(s).`);
+        for (const library of libraries) {
+            try {
+                await startPugotiSync(library, null, async () => {
+                    await invalidateLibraryScanCache(library.id);
+                    await scanLibrary(library);
+                    await store.markLibraryScanned(library.id, new Date().toISOString());
+                }, "automatic");
+                await waitForSyncCompletion();
+                const status = getPugotiSyncStatus();
+                console.log(`[SYNC] ${library.name}: ${status.state} - ${status.message}`);
+            }
+            catch (error) {
+                console.error(`[SYNC] ${library.name}:`, error);
+            }
+        }
+        console.log("[SYNC] Ciclo automático finalizado.");
+    }
+    finally {
+        automaticSyncCycleRunning = false;
+    }
 }
 function parseContentCoverPath(pathname) {
     const match = pathname.match(/^\/api\/contents\/(.+)\/cover$/);
@@ -232,7 +286,20 @@ function makePublicCollection(collection, owner) {
     };
 }
 function isLibraryKind(value) {
-    return value === "manga" || value === "manhwa" || value === "book";
+    return value === "manga" || value === "manhwa" || value === "book" || value === "comic" || value === "lightNovel" || value === "other";
+}
+function isSyncSkippedLibraryKind(kind) {
+    return kind === "book" || kind === "lightNovel";
+}
+async function invalidateLibraryScanCache(libraryId) {
+    cacheService.invalidateScan(libraryId);
+    await cacheService.invalidateLibraryCovers(libraryId);
+}
+function getNoDetectedContentMessage(kind) {
+    if (kind === "book" || kind === "lightNovel") {
+        return "Nenhuma obra detectada. Para livros, coloque arquivos .epub na pasta da biblioteca ou dentro de pastas de obras.";
+    }
+    return "Nenhuma obra detectada. A pasta deve conter pastas de obras com imagens ou PDFs.";
 }
 function isInsideMediaRoot(candidatePath) {
     const relative = path.relative(path.resolve(config.mediaRoot), path.resolve(candidatePath));
@@ -256,7 +323,7 @@ async function readMediaDirectory(requestedPath) {
 }
 async function handleApi(req, res) {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    const user = await getCurrentUser(req);
+    const user = await getCurrentUser(req, res);
     if (url.pathname === "/api/setup/status" && req.method === "GET") {
         const data = await store.read();
         sendJson(res, 200, { setupRequired: !hasConfiguredAdmin(data.users) });
@@ -335,6 +402,13 @@ async function handleApi(req, res) {
         sendJson(res, 200, {
             enabled: Boolean(config.googleClientId),
             clientId: config.googleClientId
+        });
+        return;
+    }
+    if (url.pathname === "/api/auth/pugotilab/config" && req.method === "GET") {
+        sendJson(res, 200, {
+            authUrl: config.pugotilabAuthUrl,
+            logoutUrl: config.pugotilabLogoutUrl
         });
         return;
     }
@@ -695,14 +769,62 @@ async function handleApi(req, res) {
             return;
         }
         const body = await readJson(req);
-        if (!Number.isInteger(Number(body.vaultTimeoutMinutes)) || Number(body.vaultTimeoutMinutes) < 1) {
+        if (body.vaultTimeoutMinutes !== undefined && (!Number.isInteger(Number(body.vaultTimeoutMinutes)) || Number(body.vaultTimeoutMinutes) < 1)) {
             sendJson(res, 400, { error: "O tempo do cofre deve ser um número inteiro maior que zero." });
             return;
         }
         const settings = await store.updateSettings({
-            vaultTimeoutMinutes: Number(body.vaultTimeoutMinutes)
+            vaultTimeoutMinutes: body.vaultTimeoutMinutes === undefined ? undefined : Number(body.vaultTimeoutMinutes),
+            readingDefaults: body.readingDefaults === undefined ? undefined : normalizeReadingDefaults(body.readingDefaults)
         });
         sendJson(res, 200, { settings });
+        return;
+    }
+    if (url.pathname === "/api/admin/sync/status" && req.method === "GET") {
+        if (user.role !== "admin") {
+            sendJson(res, 403, { error: "Apenas administradores podem acompanhar sincronizações." });
+            return;
+        }
+        sendJson(res, 200, { sync: getPugotiSyncStatus() });
+        return;
+    }
+    if (url.pathname === "/api/admin/sync" && req.method === "POST") {
+        if (user.role !== "admin") {
+            sendJson(res, 403, { error: "Apenas administradores podem sincronizar bibliotecas." });
+            return;
+        }
+        const body = await readJson(req);
+        const data = await store.read();
+        const library = data.libraries.find((item) => item.id === body.libraryId && !item.isPersonal);
+        if (!library) {
+            sendJson(res, 404, { error: "Biblioteca não encontrada." });
+            return;
+        }
+        if (!canSyncLibrary(library)) {
+            sendJson(res, 400, { error: "Este tipo de biblioteca não participa da sincronização." });
+            return;
+        }
+        await invalidateLibraryScanCache(library.id);
+        const currentContents = await scanLibrary(library);
+        const content = body.contentId
+            ? currentContents.find((item) => item.id === body.contentId) ?? null
+            : null;
+        if (body.contentId && !content) {
+            sendJson(res, 404, { error: "Obra não encontrada na biblioteca selecionada." });
+            return;
+        }
+        try {
+            const sync = await startPugotiSync(library, content, async () => {
+                await invalidateLibraryScanCache(library.id);
+                await scanLibrary(library);
+                await store.markLibraryScanned(library.id, new Date().toISOString());
+            });
+            sendJson(res, 202, { sync });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Não foi possível sincronizar a biblioteca.";
+            sendJson(res, message === "Já existe uma sincronização em andamento." ? 409 : 500, { error: message });
+        }
         return;
     }
     if (url.pathname === "/api/admin/users" && req.method === "POST") {
@@ -872,7 +994,7 @@ async function handleApi(req, res) {
         };
         const detectedContents = await scanLibrary(candidateLibrary);
         if (detectedContents.length === 0) {
-            sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+            sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
             return;
         }
         const library = await store.createLibrary({
@@ -922,7 +1044,7 @@ async function handleApi(req, res) {
         };
         const detectedContents = await scanLibrary(candidateLibrary);
         if (detectedContents.length === 0) {
-            sendJson(res, 400, { error: "Nenhuma obra detectada. A pasta deve conter pastas de obras com capítulos, capa e metadata.json." });
+            sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
             return;
         }
         const updated = await store.updateLibrary(library.id, {
@@ -991,6 +1113,17 @@ async function handleApi(req, res) {
             sendJson(res, 404, { error: "Biblioteca não encontrada." });
             return;
         }
+        await invalidateLibraryScanCache(library.id);
+        if (isSyncSkippedLibraryKind(library.kind)) {
+            const contents = await scanLibrary(library);
+            sendJson(res, 200, {
+                contents,
+                scannedAt: library.lastScannedAt ?? null,
+                skipped: true,
+                reason: "Livros não participam da sincronização de novos capítulos."
+            });
+            return;
+        }
         const contents = await scanLibrary(library);
         const scannedAt = new Date().toISOString();
         await store.markLibraryScanned(library.id, scannedAt);
@@ -1004,6 +1137,18 @@ async function handleApi(req, res) {
             sendJson(res, 404, { error: "Conteúdo não encontrado." });
             return;
         }
+        await invalidateLibraryScanCache(visible.library.id);
+        if (isSyncSkippedLibraryKind(visible.library.kind)) {
+            const contents = await scanLibrary(visible.library);
+            const content = contents.find((item) => item.id === contentId);
+            sendJson(res, 200, {
+                content,
+                scannedAt: visible.library.lastScannedAt ?? null,
+                skipped: true,
+                reason: "Livros não participam da sincronização de novos capítulos."
+            });
+            return;
+        }
         const contents = await scanLibrary(visible.library);
         const content = contents.find((item) => item.id === contentId);
         const scannedAt = new Date().toISOString();
@@ -1012,6 +1157,23 @@ async function handleApi(req, res) {
         return;
     }
     if (url.pathname.startsWith("/api/contents/") && req.method === "GET") {
+        const epubAssetRequest = parseContentEpubAssetPath(url.pathname);
+        if (epubAssetRequest) {
+            const data = await store.read();
+            const libraryId = epubAssetRequest.contentId.split(":")[0] ?? "";
+            const library = getRequestLibrary(user, data.libraries, libraryId, req);
+            if (!library) {
+                sendJson(res, 404, { error: "Conteúdo não encontrado." });
+                return;
+            }
+            const asset = await getContentEpubAsset(library, epubAssetRequest.contentId, epubAssetRequest.assetPath);
+            if (!asset) {
+                sendJson(res, 404, { error: "Arquivo do EPUB não encontrado." });
+                return;
+            }
+            sendBuffer(res, asset.path, asset.data);
+            return;
+        }
         const coverRequest = parseContentCoverPath(url.pathname);
         if (coverRequest) {
             const data = await store.read();
@@ -1023,7 +1185,7 @@ async function handleApi(req, res) {
             }
             const thumbPath = await getContentCoverThumbnail(library, coverRequest.contentId);
             if (thumbPath) {
-                await sendFile(res, thumbPath);
+                await sendFile(res, thumbPath, "no-cache, no-store, must-revalidate");
                 return;
             }
             const coverPath = await getContentCoverPath(library, coverRequest.contentId);
@@ -1031,7 +1193,7 @@ async function handleApi(req, res) {
                 sendJson(res, 404, { error: "Capa não encontrada." });
                 return;
             }
-            await sendFile(res, coverPath);
+            await sendFile(res, coverPath, "no-cache, no-store, must-revalidate");
             return;
         }
         const pageRequest = parseContentPagePath(url.pathname);
@@ -1044,6 +1206,12 @@ async function handleApi(req, res) {
         const library = getRequestLibrary(user, data.libraries, libraryId, req);
         if (!library) {
             sendJson(res, 404, { error: "Conteúdo não encontrado." });
+            return;
+        }
+        const bookTheme = url.searchParams.get("theme") === "dark" ? "dark" : "light";
+        const epubHtml = await getContentEpubChapterHtml(library, pageRequest.contentId, pageRequest.pageIndex, bookTheme);
+        if (epubHtml) {
+            sendHtml(res, epubHtml);
             return;
         }
         const pagePath = await getContentPagePath(library, pageRequest.contentId, pageRequest.pageIndex);
@@ -1365,6 +1533,14 @@ async function handleApi(req, res) {
 }
 const server = http.createServer(async (req, res) => {
     try {
+        if (req.url === "/health") {
+            sendJson(res, 200, {
+                status: "ok",
+                uptimeSeconds: Math.round(process.uptime()),
+                timestamp: new Date().toISOString()
+            });
+            return;
+        }
         if (req.url?.startsWith("/api/")) {
             await handleApi(req, res);
             return;
@@ -1381,5 +1557,18 @@ server.listen(config.port, () => {
         console.warn("[SMTP] SMTP_HOST nao configurado. Recuperacao de senha vai cair no console.");
     }
     console.log(`Pugotiread rodando em http://localhost:${config.port}`);
+    if (config.pugotiAutoSyncEnabled) {
+        console.log(`[SYNC] Sincronização automática ativa a cada ${Math.round(config.pugotiSyncIntervalMs / 60000)} minutos.`);
+        const initialTimer = setTimeout(() => {
+            void runAutomaticSyncCycle();
+        }, 60 * 1000);
+        initialTimer.unref();
+        const interval = setInterval(() => {
+            void runAutomaticSyncCycle();
+        }, config.pugotiSyncIntervalMs);
+        interval.unref();
+    }
+    else {
+        console.log("[SYNC] Sincronização automática desativada.");
+    }
 });
-//# sourceMappingURL=index.js.map

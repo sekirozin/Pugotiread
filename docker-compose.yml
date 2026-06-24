@@ -12,6 +12,8 @@ services:
       PORT: "8099"
       SESSION_SECRET: "troque-este-segredo-no-zimaos"
       PUGOTILAB_PROFILE_URL: "http://pugotilab-auth:8080/auth/api/profile"
+      PUGOTILAB_AUTH_URL: "https://pugotilab.com/auth"
+      PUGOTILAB_LOGOUT_URL: "https://pugotilab.com/auth/logout"
       GOOGLE_CLIENT_ID: "684109969699-ugf51n6innd2ci9i0vidh2n9p5nf5s4r.apps.googleusercontent.com"
       DATA_FILE: "/app/data/store.json"
       DB_FILE: "/app/data/store.db"

@@ -499,6 +499,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
+  if (url.pathname === "/api/auth/pugotilab/config" && req.method === "GET") {
+    sendJson(res, 200, {
+      authUrl: config.pugotilabAuthUrl,
+      logoutUrl: config.pugotilabLogoutUrl
+    });
+    return;
+  }
+
   if (url.pathname === "/api/auth/google" && req.method === "POST") {
     const body = await readJson<{ credential: string; inviteToken?: string }>(req);
 

@@ -238,8 +238,7 @@ async function syncPugotilabSession(req: IncomingMessage, res?: ServerResponse):
         biography,
         location,
         role,
-        lastActiveAt: now,
-        canLogin: false
+        lastActiveAt: now
       };
       await store.updateUser(existing.id, {
         username,
@@ -248,8 +247,7 @@ async function syncPugotilabSession(req: IncomingMessage, res?: ServerResponse):
         nickname,
         biography,
         location,
-        role,
-        canLogin: false
+        role
       });
     } else {
       user = {

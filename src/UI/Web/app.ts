@@ -44,6 +44,12 @@ declare global {
 
 let googleConfigPromise: Promise<GoogleConfig> | null = null;
 let googleScriptPromise: Promise<void> | null = null;
+let pugotilabAuthConfigPromise: Promise<PugotilabAuthConfig> | null = null;
+
+type PugotilabAuthConfig = {
+  authUrl: string;
+  logoutUrl: string;
+};
 
 const appElement = document.querySelector<HTMLDivElement>("#app");
 if (!appElement) {
@@ -94,6 +100,35 @@ function clearPasswordResetState(): void {
 async function getGoogleConfig(): Promise<GoogleConfig> {
   googleConfigPromise ??= api<GoogleConfig>("/api/auth/google/config");
   return googleConfigPromise;
+}
+
+async function getPugotilabAuthConfig(): Promise<PugotilabAuthConfig> {
+  pugotilabAuthConfigPromise ??= api<PugotilabAuthConfig>("/api/auth/pugotilab/config");
+  return pugotilabAuthConfigPromise;
+}
+
+function buildAuthUrl(baseUrl: string, returnUrl = window.location.href): string {
+  const authUrl = new URL(baseUrl, window.location.origin);
+  authUrl.searchParams.set("return", returnUrl);
+  return authUrl.toString();
+}
+
+async function redirectToPugotilabLogin(): Promise<void> {
+  const redirectKey = "pugotiread-pugotilab-auth-redirect";
+  const redirectTarget = window.location.href;
+  const alreadyRedirected = sessionStorage.getItem(redirectKey) === redirectTarget;
+  if (alreadyRedirected) {
+    renderLogin("Não foi possível validar a sessão Pugotilab. Entre novamente para continuar.");
+    return;
+  }
+
+  sessionStorage.setItem(redirectKey, redirectTarget);
+  const config = await getPugotilabAuthConfig();
+  window.location.assign(buildAuthUrl(config.authUrl, redirectTarget));
+}
+
+function clearPugotilabRedirectMarker(): void {
+  sessionStorage.removeItem("pugotiread-pugotilab-auth-redirect");
 }
 
 async function ensureGoogleScript(): Promise<void> {
@@ -287,6 +322,7 @@ async function boot(): Promise<void> {
   try {
     renderLoadingScreen("Entrando no Pugotiread", "Validando sua sessão antes de carregar as obras.");
     const payload = await api<{ user: PublicUser }>("/api/me");
+    clearPugotilabRedirectMarker();
     state.user = payload.user;
     if (state.user.needsNickname) {
       renderNicknameSetup();
@@ -307,7 +343,11 @@ async function boot(): Promise<void> {
       // Fall through to the login screen if setup status cannot be read.
     }
 
-    renderLogin();
+    try {
+      await redirectToPugotilabLogin();
+    } catch (redirectError) {
+      renderLogin(redirectError instanceof Error ? redirectError.message : "Não foi possível abrir o login Pugotilab.");
+    }
   }
 }
 
@@ -426,101 +466,25 @@ async function loadLibrary(libraryId: string): Promise<void> {
 }
 
 function renderLogin(error = ""): void {
-  if (state.passwordResetOpen) {
-    app.innerHTML = `
-      <main class="login-shell">
-        ${renderPasswordResetRequestSection()}
-      </main>
-    `;
-
-    document.querySelector("#close-password-reset")?.addEventListener("click", () => {
-      state.passwordResetOpen = false;
-      state.passwordResetMessage = "";
-      state.passwordResetError = "";
-      renderLogin(error);
-    });
-
-    document.querySelector<HTMLFormElement>("#password-reset-request-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const form = new FormData(event.currentTarget as HTMLFormElement);
-      const email = String(form.get("email") ?? "").trim();
-      state.passwordResetEmail = email;
-      state.passwordResetMessage = "";
-      state.passwordResetError = "";
-
-      try {
-        await api<{ message: string }>("/api/password-reset/request", {
-          method: "POST",
-          body: JSON.stringify({ email })
-        });
-        state.passwordResetMessage = "Se o e-mail estiver cadastrado, você receberá um link para trocar a senha.";
-        renderLogin(error);
-      } catch (resetError) {
-        state.passwordResetError = resetError instanceof Error ? resetError.message : "Não foi possível solicitar a troca de senha.";
-        renderLogin(error);
-      }
-    });
-    return;
-  }
-
   app.innerHTML = `
     <main class="login-shell">
-      <form class="login-panel" id="login-form">
+      <section class="login-panel pugotilab-login-panel">
         <h1 class="brand">Pugotiread</h1>
-        <p class="muted">A sua plataforma de leitura digital.</p>
-        <label class="form-row">
-          <span>Usuário</span>
-          <input class="input" name="username" autocomplete="username" />
-        </label>
-        <label class="form-row">
-          <span>Senha</span>
-          <input class="input" type="password" name="password" autocomplete="current-password" />
-        </label>
+        <p class="muted">Use sua conta Pugotilab para acessar a biblioteca.</p>
+        <p class="google-unavailable">Se você já estiver logado no Pugotilab, a entrada acontece automaticamente.</p>
         <p class="error">${escapeHtml(error)}</p>
-        <button class="button" type="submit">Entrar</button>
-        <button class="link-button" id="toggle-password-reset" type="button">Esqueci minha senha</button>
-      </form>
-      ${state.passwordResetOpen ? renderPasswordResetRequestSection() : ""}
+        <button class="button" id="pugotilab-login-button" type="button">Entrar com Pugotilab</button>
+      </section>
     </main>
   `;
 
-  document.querySelector<HTMLFormElement>("#login-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget as HTMLFormElement);
-
+  document.querySelector("#pugotilab-login-button")?.addEventListener("click", async () => {
+    sessionStorage.removeItem("pugotiread-pugotilab-auth-redirect");
     try {
-      const payload = await api<{ user: PublicUser }>("/api/login", {
-        method: "POST",
-        body: JSON.stringify({
-          username: String(form.get("username")),
-          password: String(form.get("password"))
-        })
-      });
-      state.user = payload.user;
-      if (state.user.needsNickname) {
-        renderNicknameSetup();
-        return;
-      }
-      await loadHome();
-    } catch (loginError) {
-      const message = loginError instanceof Error ? loginError.message : "Falha no login.";
-      if (message.toLowerCase().includes("setup") || message.toLowerCase().includes("configurado")) {
-        state.setupRequired = true;
-        renderInitialSetup(message);
-        return;
-      }
-      renderLogin(message);
+      await redirectToPugotilabLogin();
+    } catch (redirectError) {
+      renderLogin(redirectError instanceof Error ? redirectError.message : "Não foi possível abrir o login Pugotilab.");
     }
-  });
-
-  document.querySelector("#toggle-password-reset")?.addEventListener("click", () => {
-    state.passwordResetOpen = !state.passwordResetOpen;
-    if (!state.passwordResetOpen) {
-      state.passwordResetEmail = "";
-      state.passwordResetMessage = "";
-      state.passwordResetError = "";
-    }
-    renderLogin(error);
   });
 }
 
@@ -4280,6 +4244,7 @@ function bindShellEvents(): void {
 
   document.querySelector("#logout-button")?.addEventListener("click", async () => {
     await api<void>("/api/logout", { method: "POST" });
+    const authConfig = await getPugotilabAuthConfig();
     clearVaultInactivityTimer();
     state.user = null;
     state.personalLibraries = [];
@@ -4291,7 +4256,7 @@ function bindShellEvents(): void {
     state.profilePasswordError = "";
     state.profilePasswordMessage = "";
     clearPasswordResetState();
-    renderLogin();
+    window.location.assign(buildAuthUrl(authConfig.logoutUrl, window.location.origin + "/"));
   });
 
   document.querySelector("#search")?.addEventListener("keydown", (event) => {
