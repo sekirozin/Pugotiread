@@ -729,8 +729,10 @@ button {
 }
 
 .account-menu-item {
-  display: block;
+  display: flex;
   width: 100%;
+  align-items: center;
+  gap: 9px;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -744,6 +746,11 @@ button {
 
 .account-menu-item.danger {
   color: #ffb4ae;
+}
+
+.account-menu-item .phosphor-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar {

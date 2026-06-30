@@ -36,6 +36,7 @@ export const ICONS = {
   ratingFilled: "ph-star-fill",
   continue: "ph-play-circle",
   share: "ph-arrow-square-out",
+  logout: "ph-arrow-square-out",
   book: "ph-book",
   pencil: "ph-pencil",
   vaultOpen: "ph-lock-open",

@@ -101,7 +101,7 @@ function renderAccountMenu(userName: string): string {
         </div>
       </div>
       <button class="account-menu-item" id="profile-button" type="button" role="menuitem">Perfil</button>
-      <button class="account-menu-item danger" id="logout-button" type="button" role="menuitem">Logout</button>
+      <button class="account-menu-item danger" id="logout-button" type="button" role="menuitem">${renderIcon("logout")}<span>Sair</span></button>
     </div>
   `;
 }

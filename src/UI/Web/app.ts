@@ -238,6 +238,29 @@ function closeFloatingMenusFromOutside(target: EventTarget | null): void {
   }
 }
 
+function closeSidebarFromOutside(target: EventTarget | null): void {
+  const element = target instanceof HTMLElement ? target : null;
+  if (element?.closest('.sidebar, #menu-button')) {
+    return;
+  }
+
+  const shell = document.querySelector('.app-shell');
+  const button = document.querySelector<HTMLButtonElement>('#menu-button');
+  if (isMobileViewport() && state.mobileNavOpen) {
+    state.mobileNavOpen = false;
+    shell?.classList.remove('mobile-nav-open');
+    document.querySelector('#mobile-nav-backdrop')?.remove();
+    button?.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  if (!isMobileViewport() && !state.sidebarCollapsed) {
+    state.sidebarCollapsed = true;
+    shell?.classList.add('sidebar-collapsed');
+    button?.setAttribute('aria-expanded', 'false');
+  }
+}
+
 function closeNavigationPanels(): void {
   state.accountMenuOpen = false;
   state.statsMenuOpen = false;
@@ -265,6 +288,7 @@ function openView(view: AppState["activeView"]): void {
 
 document.addEventListener("click", (event) => {
   closeFloatingMenusFromOutside(event.target);
+  closeSidebarFromOutside(event.target);
 });
 
 ["click", "keydown", "pointermove", "scroll"].forEach((eventName) => {
