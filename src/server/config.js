@@ -71,6 +71,8 @@ export const config = {
     smtpFrom: process.env.SMTP_FROM ?? "Pugotiread <no-reply@localhost>",
     pugotiCommand: process.env.PUGOTI_COMMAND ?? process.env.MANGASEK_COMMAND ?? "pugoti",
     pugotiTimeoutMs: readPositiveNumber(process.env.PUGOTI_TIMEOUT_MS ?? process.env.MANGASEK_TIMEOUT_MS, 30 * 60 * 1000),
+    pugotiIoLockPath: process.env.PUGOTI_IO_LOCK_PATH?.trim() ?? "",
+    pugotiIoLockWaitSeconds: readPositiveNumber(process.env.PUGOTI_IO_LOCK_WAIT_SECONDS, 6 * 60 * 60),
     pugotiAutoSyncEnabled: readBoolean(process.env.PUGOTI_AUTO_SYNC_ENABLED, true),
     pugotiSyncIntervalMs: readPositiveNumber(process.env.PUGOTI_SYNC_INTERVAL_MS, 2 * 60 * 60 * 1000)
 };

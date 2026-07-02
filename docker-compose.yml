@@ -23,9 +23,13 @@ services:
       PUGOTI_COMMAND: "/opt/pugoti/bin/pugoti"
       PUGOTI_AUTO_SYNC_ENABLED: "true"
       PUGOTI_SYNC_INTERVAL_MS: "7200000"
+      PUGOTI_TIMEOUT_MS: "28800000"
+      PUGOTI_IO_LOCK_PATH: "/scheduler/io.lock"
+      PUGOTI_IO_LOCK_WAIT_SECONDS: "21600"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
       - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media
+      - /DATA/AppData/pugoti-scheduler:/scheduler
     networks:
       - default
       - pugotilab

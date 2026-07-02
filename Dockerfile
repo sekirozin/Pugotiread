@@ -14,7 +14,7 @@ RUN npm run build
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
-RUN apk add --no-cache python3 py3-pip make g++ unzip
+RUN apk add --no-cache python3 py3-pip make g++ unzip util-linux
 ENV NODE_ENV=production
 ENV PORT=8099
 ENV DATA_FILE=/app/data/store.json

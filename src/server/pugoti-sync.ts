@@ -202,7 +202,22 @@ export async function startPugotiSync(
     finishedAt: null
   });
 
-  const child = spawn(config.pugotiCommand, args, {
+  const command = config.pugotiIoLockPath ? "flock" : config.pugotiCommand;
+  const commandArgs = config.pugotiIoLockPath
+    ? [
+        "--exclusive",
+        "--wait",
+        String(config.pugotiIoLockWaitSeconds),
+        config.pugotiIoLockPath,
+        config.pugotiCommand,
+        ...args
+      ]
+    : args;
+  if (config.pugotiIoLockPath) {
+    syncStatus.message = `${target}: aguardando a fila de operações do disco...`;
+  }
+
+  const child = spawn(command, commandArgs, {
     cwd: library.path,
     env: { ...process.env, PUGOTI_PROGRESS: "1" },
     stdio: ["ignore", "pipe", "pipe"]
