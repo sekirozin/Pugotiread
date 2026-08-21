@@ -28,7 +28,7 @@ services:
       PUGOTI_IO_LOCK_WAIT_SECONDS: "21600"
     volumes:
       - /DATA/AppData/pugotiread/data:/app/data
-      - /DATA/AppData/big-bear-nextcloud/html/data/casaos/files/Midias:/media
+      - /DATA/.media/SSD_KingFast/Pugotiread:/media
       - /DATA/AppData/pugoti-scheduler:/scheduler
     networks:
       - default
