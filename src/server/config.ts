@@ -79,6 +79,7 @@ export const config = {
   pugotilabLogoutUrl: process.env.PUGOTILAB_LOGOUT_URL ?? "https://pugotilab.com/auth/logout",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   cacheDir: process.env.CACHE_DIR ?? path.join(projectRoot, "data/cache"),
+  libraryCacheDbFile: process.env.LIBRARY_CACHE_DB_FILE ?? path.join(projectRoot, "data/library-cache.db"),
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: Number(process.env.SMTP_PORT ?? 587),
   smtpSecure: process.env.SMTP_SECURE === "true",

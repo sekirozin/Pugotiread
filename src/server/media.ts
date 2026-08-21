@@ -445,11 +445,9 @@ export async function getLibraryMtime(libraryPath: string): Promise<string> {
   }
 }
 
-export async function scanLibrary(library: Library): Promise<ContentItem[]> {
-  const stamp = await getLibraryMtime(library.path);
-  const cached = cacheService.getCachedScan<ContentItem[]>(library.id, stamp);
-  if (cached) return cached;
+const libraryScanPromises = new Map<string, Promise<ContentItem[]>>();
 
+async function performLibraryScan(library: Library, stamp: string): Promise<ContentItem[]> {
   try {
     const entries = await fs.readdir(library.path, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory());
@@ -463,7 +461,32 @@ export async function scanLibrary(library: Library): Promise<ContentItem[]> {
     return sorted;
   } catch {
     return [];
+  } finally {
+    libraryScanPromises.delete(library.id);
   }
+}
+
+export async function scanLibrary(library: Library, options: { refresh?: boolean } = {}): Promise<ContentItem[]> {
+  const stamp = await getLibraryMtime(library.path);
+  const cached = cacheService.getCachedScan<ContentItem[]>(library.id, stamp);
+  if (cached && !options.refresh) return cached;
+
+  const running = libraryScanPromises.get(library.id);
+  if (running) {
+    const latest = cacheService.getLatestScan<ContentItem[]>(library.id);
+    return latest?.data ?? running;
+  }
+
+  const latest = cacheService.getLatestScan<ContentItem[]>(library.id);
+  const refreshPromise = performLibraryScan(library, stamp);
+  libraryScanPromises.set(library.id, refreshPromise);
+
+  if (latest && !options.refresh) {
+    void refreshPromise.catch((error) => console.error(`[MEDIA] Atualização da biblioteca ${library.id}:`, error));
+    return latest.data;
+  }
+
+  return refreshPromise;
 }
 
 export async function getContentCoverPath(library: Library, contentId: string): Promise<string | null> {

@@ -1,4 +1,6 @@
 import sharp from "sharp";
+import Database from "better-sqlite3";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
@@ -8,6 +10,21 @@ const THUMBNAIL_QUALITY = 75;
 
 class CacheService {
   private scanCache = new Map<string, { data: unknown; stamp: string }>();
+  private libraryCacheDb: Database.Database;
+
+  constructor() {
+    fsSync.mkdirSync(path.dirname(config.libraryCacheDbFile), { recursive: true });
+    this.libraryCacheDb = new Database(config.libraryCacheDbFile);
+    this.libraryCacheDb.pragma("journal_mode = WAL");
+    this.libraryCacheDb.exec(`
+      CREATE TABLE IF NOT EXISTS library_scans (
+        libraryId TEXT PRIMARY KEY,
+        stamp TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+    `);
+  }
 
   getCoverThumbnailPath(contentId: string): string {
     return path.join(config.cacheDir, "covers", `${contentId}.webp`);
@@ -62,16 +79,59 @@ class CacheService {
 
   getCachedScan<T>(key: string, stamp: string): T | null {
     const entry = this.scanCache.get(key);
-    if (!entry || entry.stamp !== stamp) return null;
-    return entry.data as T;
+    if (entry?.stamp === stamp) return entry.data as T;
+
+    const persisted = this.libraryCacheDb
+      .prepare("SELECT stamp, payload FROM library_scans WHERE libraryId = ?")
+      .get(key) as { stamp: string; payload: string } | undefined;
+    if (!persisted || persisted.stamp !== stamp) return null;
+
+    try {
+      const data = JSON.parse(persisted.payload) as T;
+      this.scanCache.set(key, { data, stamp: persisted.stamp });
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  getLatestScan<T>(key: string): { data: T; stamp: string } | null {
+    const entry = this.scanCache.get(key);
+    if (entry) {
+      return { data: entry.data as T, stamp: entry.stamp };
+    }
+
+    const persisted = this.libraryCacheDb
+      .prepare("SELECT stamp, payload FROM library_scans WHERE libraryId = ?")
+      .get(key) as { stamp: string; payload: string } | undefined;
+    if (!persisted) return null;
+
+    try {
+      const data = JSON.parse(persisted.payload) as T;
+      this.scanCache.set(key, { data, stamp: persisted.stamp });
+      return { data, stamp: persisted.stamp };
+    } catch {
+      return null;
+    }
   }
 
   setCachedScan<T>(key: string, data: T, stamp: string): void {
     this.scanCache.set(key, { data, stamp });
+    this.libraryCacheDb
+      .prepare(`
+        INSERT INTO library_scans (libraryId, stamp, payload, updatedAt)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(libraryId) DO UPDATE SET
+          stamp = excluded.stamp,
+          payload = excluded.payload,
+          updatedAt = excluded.updatedAt
+      `)
+      .run(key, stamp, JSON.stringify(data), new Date().toISOString());
   }
 
   invalidateScan(libraryId: string): void {
     this.scanCache.delete(libraryId);
+    this.libraryCacheDb.prepare("DELETE FROM library_scans WHERE libraryId = ?").run(libraryId);
   }
 }
 

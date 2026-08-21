@@ -147,7 +147,7 @@ async function runAutomaticSyncCycle(): Promise<void> {
       try {
         await startPugotiSync(library, null, async () => {
           await invalidateLibraryScanCache(library.id);
-          await scanLibrary(library);
+          await scanLibrary(library, { refresh: true });
           await store.markLibraryScanned(library.id, new Date().toISOString());
         }, "automatic");
         await waitForSyncCompletion();
@@ -971,7 +971,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     await invalidateLibraryScanCache(library.id);
-    const currentContents = await scanLibrary(library);
+    const currentContents = await scanLibrary(library, { refresh: true });
     const content = body.contentId
       ? currentContents.find((item) => item.id === body.contentId) ?? null
       : null;
@@ -983,7 +983,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     try {
       const sync = await startPugotiSync(library, content, async () => {
         await invalidateLibraryScanCache(library.id);
-        await scanLibrary(library);
+        await scanLibrary(library, { refresh: true });
         await store.markLibraryScanned(library.id, new Date().toISOString());
       });
       sendJson(res, 202, { sync });
@@ -1201,7 +1201,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       isPersonal,
       ownerUserId: isPersonal ? user.id : null
     };
-    const detectedContents = await scanLibrary(candidateLibrary);
+    const detectedContents = await scanLibrary(candidateLibrary, { refresh: true });
     if (detectedContents.length === 0) {
       sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
       return;
@@ -1259,7 +1259,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       kind: body.kind,
       path: libraryPath
     };
-    const detectedContents = await scanLibrary(candidateLibrary);
+    const detectedContents = await scanLibrary(candidateLibrary, { refresh: true });
     if (detectedContents.length === 0) {
       sendJson(res, 400, { error: getNoDetectedContentMessage(body.kind) });
       return;
@@ -1345,7 +1345,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     await invalidateLibraryScanCache(library.id);
 
     if (isSyncSkippedLibraryKind(library.kind)) {
-      const contents = await scanLibrary(library);
+      const contents = await scanLibrary(library, { refresh: true });
       sendJson(res, 200, {
         contents,
         scannedAt: library.lastScannedAt ?? null,
@@ -1355,7 +1355,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const contents = await scanLibrary(library);
+    const contents = await scanLibrary(library, { refresh: true });
     const scannedAt = new Date().toISOString();
     await store.markLibraryScanned(library.id, scannedAt);
     sendJson(res, 200, { contents, scannedAt });
@@ -1373,7 +1373,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     await invalidateLibraryScanCache(visible.library.id);
 
     if (isSyncSkippedLibraryKind(visible.library.kind)) {
-      const contents = await scanLibrary(visible.library);
+      const contents = await scanLibrary(visible.library, { refresh: true });
       const content = contents.find((item) => item.id === contentId);
       sendJson(res, 200, {
         content,
@@ -1384,7 +1384,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const contents = await scanLibrary(visible.library);
+    const contents = await scanLibrary(visible.library, { refresh: true });
     const content = contents.find((item) => item.id === contentId);
     const scannedAt = new Date().toISOString();
     await store.markLibraryScanned(visible.library.id, scannedAt);
