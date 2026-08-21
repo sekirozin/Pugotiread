@@ -5,4 +5,5 @@ media/
 .codex/
 .env
 data/*.local.json
+data/library-cache.db*
 *.log

@@ -8,7 +8,7 @@ import { cacheService } from "./cache.js";
 import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
 import { canSyncLibrary, getPugotiSyncStatus, startPugotiSync } from "./pugoti-sync.js";
-import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary } from "./media.js";
+import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary, startLibraryWatchers } from "./media.js";
 import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
 import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
 
@@ -1216,6 +1216,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       ownerUserId: isPersonal ? user.id : null
     });
 
+    startLibraryWatchers([...data.libraries, library]);
     sendJson(res, 201, { library });
     return;
   }
@@ -1275,6 +1276,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    startLibraryWatchers(data.libraries.map((item) => item.id === updated.id ? updated : item));
     sendJson(res, 200, { library: updated });
     return;
   }
@@ -1299,6 +1301,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    startLibraryWatchers(data.libraries.filter((item) => item.id !== library.id));
     sendNoContent(res);
     return;
   }
@@ -1861,6 +1864,10 @@ server.listen(config.port, () => {
     console.warn("[SMTP] SMTP_HOST nao configurado. Recuperacao de senha vai cair no console.");
   }
   console.log(`Pugotiread rodando em http://localhost:${config.port}`);
+
+  void store.read().then((data) => startLibraryWatchers(data.libraries)).catch((error) => {
+    console.error("[MEDIA] Não foi possível iniciar os observadores de bibliotecas:", error);
+  });
 
   if (config.pugotiAutoSyncEnabled) {
     console.log(`[SYNC] Sincronização automática ativa a cada ${Math.round(config.pugotiSyncIntervalMs / 60000)} minutos.`);

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -446,6 +447,42 @@ export async function getLibraryMtime(libraryPath: string): Promise<string> {
 }
 
 const libraryScanPromises = new Map<string, Promise<ContentItem[]>>();
+const libraryWatchers = new Map<string, fsSync.FSWatcher>();
+const libraryWatchTimers = new Map<string, NodeJS.Timeout>();
+
+export function startLibraryWatchers(libraries: Library[]): void {
+  const activeIds = new Set(libraries.map((library) => library.id));
+  for (const [libraryId, watcher] of libraryWatchers) {
+    if (!activeIds.has(libraryId)) {
+      watcher.close();
+      libraryWatchers.delete(libraryId);
+      const timer = libraryWatchTimers.get(libraryId);
+      if (timer) clearTimeout(timer);
+      libraryWatchTimers.delete(libraryId);
+    }
+  }
+
+  for (const library of libraries) {
+    if (libraryWatchers.has(library.id)) continue;
+    try {
+      const watcher = fsSync.watch(library.path, { persistent: false }, () => {
+        const previousTimer = libraryWatchTimers.get(library.id);
+        if (previousTimer) clearTimeout(previousTimer);
+        const timer = setTimeout(() => {
+          libraryWatchTimers.delete(library.id);
+          void scanLibrary(library, { refresh: true }).catch((error) => {
+            console.error(`[MEDIA] Atualização por evento da biblioteca ${library.id}:`, error);
+          });
+        }, 750);
+        timer.unref();
+        libraryWatchTimers.set(library.id, timer);
+      });
+      libraryWatchers.set(library.id, watcher);
+    } catch (error) {
+      console.warn(`[MEDIA] Não foi possível observar a biblioteca ${library.id}:`, error);
+    }
+  }
+}
 
 async function performLibraryScan(library: Library, stamp: string): Promise<ContentItem[]> {
   try {
