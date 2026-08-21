@@ -1327,7 +1327,25 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     const contents = await scanLibrary(library);
-    sendJson(res, 200, { contents });
+    const limitValue = Number(url.searchParams.get("limit"));
+    const offsetValue = Number(url.searchParams.get("offset"));
+    const hasPagination = Number.isInteger(limitValue) && limitValue > 0;
+    if (!hasPagination) {
+      sendJson(res, 200, { contents });
+      return;
+    }
+
+    const offset = Number.isInteger(offsetValue) && offsetValue >= 0 ? offsetValue : 0;
+    const limit = Math.min(limitValue, 100);
+    sendJson(res, 200, {
+      contents: contents.slice(offset, offset + limit),
+      pagination: {
+        offset,
+        limit,
+        total: contents.length,
+        hasMore: offset + limit < contents.length
+      }
+    });
     return;
   }
 
