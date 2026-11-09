@@ -2,12 +2,14 @@ import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { RpgDocument } from "../shared/types.js";
 import { config } from "./config.js";
-import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, ReaderFittingMode, ReaderMode, ReadingProgress, SeriesMark, ServerSettings, StoreShape, User } from "../shared/types.js";
+import type { Bookmark, ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PdfFormCopyAccess, ReaderDirection, ReaderFittingMode, ReaderMode, ReadingProgress, SeriesMark, ServerSettings, StoreShape, User } from "../shared/types.js";
 
 const libraryKinds: LibraryKind[] = ["manga", "manhwa", "book", "comic", "lightNovel", "other"];
 const readerModes: ReaderMode[] = ["horizontal", "paged-vertical", "vertical-scroll"];
 const readerFittingModes: ReaderFittingMode[] = ["height", "width", "original"];
+const readerDirections: ReaderDirection[] = ["ltr", "rtl"];
 
 export type SyncRun = {
   id: string;
@@ -23,12 +25,12 @@ export type SyncRun = {
 };
 
 export const defaultReadingDefaults: ServerSettings["readingDefaults"] = {
-  manga: { mode: "horizontal", fitting: "height", controlsVisible: false },
-  manhwa: { mode: "vertical-scroll", fitting: "width", controlsVisible: false },
-  book: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
-  comic: { mode: "horizontal", fitting: "height", controlsVisible: false },
-  lightNovel: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
-  other: { mode: "vertical-scroll", fitting: "height", controlsVisible: false }
+  manga: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: false },
+  manhwa: { mode: "vertical-scroll", fitting: "width", direction: "ltr", controlsVisible: false },
+  book: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: true },
+  comic: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: false },
+  lightNovel: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: true },
+  other: { mode: "vertical-scroll", fitting: "height", direction: "ltr", controlsVisible: false }
 };
 
 export const defaultServerSettings: ServerSettings = {
@@ -72,8 +74,9 @@ export function normalizeReadingDefaults(value: unknown): ServerSettings["readin
     const item = raw[kind];
     const mode = item && readerModes.includes(item.mode) ? item.mode : defaultReadingDefaults[kind].mode;
     const fitting = item && readerFittingModes.includes(item.fitting) ? item.fitting : defaultReadingDefaults[kind].fitting;
+    const direction = item && readerDirections.includes(item.direction) ? item.direction : defaultReadingDefaults[kind].direction;
     const controlsVisible = typeof item?.controlsVisible === "boolean" ? item.controlsVisible : defaultReadingDefaults[kind].controlsVisible;
-    return [kind, { mode, fitting, controlsVisible }];
+    return [kind, { mode, fitting, direction, controlsVisible }];
   })) as ServerSettings["readingDefaults"];
 }
 
@@ -90,6 +93,110 @@ function parseSettingJson(value: string | undefined): unknown {
 
 export class Store {
   private db: Database.Database;
+  pdfLocations(): Array<{contentId:string;fileKey:string}> {
+    return this.db.prepare('SELECT contentId,fileKey FROM pdf_locations').all() as Array<{contentId:string;fileKey:string}>;
+  }
+  pdfLocation(contentId:string): {contentId:string;fileKey:string}|undefined {
+    return this.db.prepare('SELECT contentId,fileKey FROM pdf_locations WHERE contentId=?').get(contentId) as {contentId:string;fileKey:string}|undefined;
+  }
+  pdfLocationsByFileKey(fileKey:string): Array<{contentId:string;fileKey:string}> {
+    return this.db.prepare('SELECT contentId,fileKey FROM pdf_locations WHERE fileKey=?').all(fileKey) as Array<{contentId:string;fileKey:string}>;
+  }
+  rememberPdfLocation(contentId:string,fileKey:string):void {
+    this.db.prepare('INSERT INTO pdf_locations(contentId,fileKey) VALUES(?,?) ON CONFLICT(contentId) DO UPDATE SET fileKey=excluded.fileKey WHERE pdf_locations.fileKey<>excluded.fileKey').run(contentId,fileKey);
+  }
+
+  rpgDocuments(): RpgDocument[] {
+    return this.db.prepare('SELECT id,contentId,role FROM rpg_documents').all() as RpgDocument[];
+  }
+  rpgLinks(): Array<{ moduleId: string; templateId: string }> {
+    return this.db.prepare('SELECT moduleId,templateId FROM rpg_templates').all() as Array<{ moduleId: string; templateId: string }>;
+  }
+  setRpgDocument(contentId: string, role: 'module' | 'template' | null, templateIds: string[]): void {
+    this.db.transaction(() => {
+      const old = this.rpgDocuments().find(item => item.contentId === contentId);
+      // Keep the stable identifier, even when a document changes its role.
+      if (!role) {
+        if (old && this.pdfFormCopies().some(copy => copy.moduleId === old.id)) throw new Error('Este módulo possui fichas vinculadas. Reassocie as fichas antes de removê-lo.');
+        this.db.prepare('DELETE FROM rpg_documents WHERE contentId=?').run(contentId);
+        return;
+      }
+      const id = old?.id ?? crypto.randomUUID();
+      if (old?.role === 'module' && role !== old.role && this.pdfFormCopies().some(copy => copy.moduleId === old.id)) throw new Error('Este módulo possui fichas vinculadas.');
+      this.db.prepare('INSERT INTO rpg_documents(id,contentId,role) VALUES(?,?,?) ON CONFLICT(contentId) DO UPDATE SET role=excluded.role').run(id, contentId, role);
+      if (old && old.role !== role) this.db.prepare('DELETE FROM rpg_templates WHERE moduleId=? OR templateId=?').run(id,id);
+      if (role === 'module') {
+        this.db.prepare('DELETE FROM rpg_templates WHERE moduleId=?').run(id);
+        for (const templateId of new Set(templateIds)) this.db.prepare('INSERT INTO rpg_templates(moduleId,templateId) VALUES(?,?)').run(id, templateId);
+      }
+    })();
+  }
+  setPdfCopyModule(contentId: string, moduleId: string | null): void {
+    this.db.prepare('UPDATE pdf_form_copies SET moduleId=? WHERE contentId=?').run(moduleId,contentId);
+  }
+  canEditPdfContent(contentId: string, user: Pick<User,'id'|'role'>): boolean {
+    const copy = this.pdfFormCopies().find(item => item.contentId === contentId);
+    return !copy || user.role === 'admin' || copy.ownerUserId === user.id;
+  }
+
+  isPdfCopy(contentId: string, revision?: string): boolean {
+    const row=this.db.prepare("SELECT revision FROM pdf_form_copies WHERE contentId = ?").get(contentId) as {revision:string}|undefined;
+    return !!row && (revision===undefined || row.revision===revision);
+  }
+  registerPdfCopy(contentId: string, sourceId: string, revision: string, ownerUserId: string, system = ""): void {
+    this.db.prepare(`INSERT INTO pdf_form_copies
+      (contentId,sourceId,revision,ownerUserId,visibility,sharedWithUserIds,system)
+      VALUES (?, ?, ?, ?, 'private', '[]', ?)
+      ON CONFLICT(contentId) DO UPDATE SET revision=excluded.revision`)
+      .run(contentId, sourceId, revision, ownerUserId, system);
+  }
+  updatePdfCopyRevision(contentId:string,revision:string):void{
+    this.db.prepare('UPDATE pdf_form_copies SET revision=? WHERE contentId=?').run(revision,contentId);
+  }
+  canAccessPdfContent(contentId:string,user:Pick<User,'id'|'role'>):boolean{
+    const row=this.db.prepare('SELECT ownerUserId,visibility,sharedWithUserIds FROM pdf_form_copies WHERE contentId=?').get(contentId) as {ownerUserId:string;visibility:string;sharedWithUserIds:string}|undefined;
+    if(!row)return true;
+    if(user.role==='admin'||row.ownerUserId===user.id||row.visibility==='public')return true;
+    if(row.visibility!=='shared')return false;
+    try{return (JSON.parse(row.sharedWithUserIds||'[]') as string[]).includes(user.id);}catch{return false;}
+  }
+  pdfFormCopies():PdfFormCopyAccess[]{
+    return (this.db.prepare(`SELECT p.contentId,p.sourceId,p.moduleId,p.ownerUserId,COALESCE(u.displayName,'Usuário removido') ownerDisplayName,p.visibility,p.sharedWithUserIds,p.system FROM pdf_form_copies p LEFT JOIN users u ON u.id=p.ownerUserId ORDER BY p.contentId`).all() as Array<Omit<PdfFormCopyAccess,'sharedWithUserIds'>&{sharedWithUserIds:string}>).map(row=>({...row,sharedWithUserIds:JSON.parse(row.sharedWithUserIds||'[]')}));
+  }
+  updatePdfFormCopy(contentId:string,input:{ownerUserId:string;visibility:string;sharedWithUserIds:string[];system:string}):PdfFormCopyAccess|null{
+    if(!['private','shared','public'].includes(input.visibility))throw new Error('Visibilidade inválida.');
+    if(!this.db.prepare('SELECT 1 FROM users WHERE id=?').get(input.ownerUserId))throw new Error('Proprietário inválido.');
+    const shared=[...new Set(input.sharedWithUserIds)].filter(id=>this.db.prepare('SELECT 1 FROM users WHERE id=?').get(id));
+    this.db.prepare('UPDATE pdf_form_copies SET ownerUserId=?,visibility=?,sharedWithUserIds=?,system=? WHERE contentId=?').run(input.ownerUserId,input.visibility,JSON.stringify(shared),input.system.trim().slice(0,80),contentId);
+    return this.pdfFormCopies().find(item=>item.contentId===contentId)??null;
+  }
+  renamePdfReferences(oldId: string, newId: string): void {
+    if(oldId === newId) return;
+    this.db.transaction(()=>{
+      const folder = (id:string) => {
+        const relative=Buffer.from(id.slice(id.indexOf(':')+1),'base64url').toString('utf8');
+        const parent=path.dirname(relative);
+        return parent==='.'?'':parent.split(path.sep).join('/');
+      };
+      this.db.prepare("UPDATE pdf_form_copies SET system=? WHERE contentId=? AND (system=? OR system='')").run(folder(newId),oldId,folder(oldId));
+      for(const table of ['progress','bookmarks','series_marks','user_want_to_read','user_reading_list','reviews','sync_runs','pdf_form_copies']) {
+        this.db.prepare(`UPDATE ${table} SET contentId = ? WHERE contentId = ?`).run(newId,oldId);
+      }
+      this.db.prepare('UPDATE pdf_form_copies SET sourceId = ? WHERE sourceId = ?').run(newId,oldId);
+      this.db.prepare('UPDATE rpg_documents SET contentId=? WHERE contentId=?').run(newId,oldId);
+      this.db.prepare('UPDATE pdf_locations SET contentId=? WHERE contentId=?').run(newId,oldId);
+      const users=this.db.prepare('SELECT id,favoriteContentIds FROM users').all() as {id:string;favoriteContentIds:string}[];
+      for(const user of users){
+        const ids=JSON.parse(user.favoriteContentIds) as string[];
+        if(ids.includes(oldId))this.db.prepare('UPDATE users SET favoriteContentIds=? WHERE id=?').run(JSON.stringify(ids.map(id=>id===oldId?newId:id)),user.id);
+      }
+      const rows=this.db.prepare('SELECT id, contentIds FROM collections').all() as {id:string;contentIds:string}[];
+      for(const row of rows){
+        const ids=JSON.parse(row.contentIds) as string[];
+        if(ids.includes(oldId)) this.db.prepare('UPDATE collections SET contentIds = ? WHERE id = ?').run(JSON.stringify(ids.map(id=>id===oldId?newId:id)),row.id);
+      }
+    })();
+  }
 
   constructor() {
     const dbDir = path.dirname(config.dbFile);
@@ -115,6 +222,24 @@ export class Store {
   }
 
   private ensureTables(): void {
+    this.db.exec("CREATE TABLE IF NOT EXISTS pdf_form_copies (contentId TEXT PRIMARY KEY, sourceId TEXT NOT NULL)");
+    if(!(this.db.prepare('PRAGMA table_info(pdf_form_copies)').all() as {name:string}[]).some(column=>column.name==='revision')) this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN revision TEXT NOT NULL DEFAULT ''");
+    const pdfColumns=this.db.prepare('PRAGMA table_info(pdf_form_copies)').all() as {name:string}[];
+    if(!pdfColumns.some(column=>column.name==='ownerUserId'))this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN ownerUserId TEXT NOT NULL DEFAULT ''");
+    if(!pdfColumns.some(column=>column.name==='visibility'))this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
+    if(!pdfColumns.some(column=>column.name==='sharedWithUserIds'))this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN sharedWithUserIds TEXT NOT NULL DEFAULT '[]'");
+    if(!pdfColumns.some(column=>column.name==='system'))this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN system TEXT NOT NULL DEFAULT ''");
+    if(!pdfColumns.some(column=>column.name==='moduleId'))this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN moduleId TEXT");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS rpg_documents (
+      id TEXT PRIMARY KEY, contentId TEXT UNIQUE NOT NULL, role TEXT NOT NULL CHECK(role IN ('module','template'))
+    );
+    CREATE TABLE IF NOT EXISTS rpg_templates (
+      moduleId TEXT NOT NULL REFERENCES rpg_documents(id) ON DELETE CASCADE,
+      templateId TEXT NOT NULL REFERENCES rpg_documents(id) ON DELETE CASCADE,
+      PRIMARY KEY(moduleId,templateId)
+    );`);
+    this.db.exec('CREATE TABLE IF NOT EXISTS pdf_locations(contentId TEXT PRIMARY KEY,fileKey TEXT NOT NULL)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS pdf_locations_file_key ON pdf_locations(fileKey)');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -261,6 +386,8 @@ export class Store {
   }
 
   private ensureCompatibility(): void {
+    this.ensureColumn("progress", "epubOffset", "epubOffset REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("bookmarks", "name", "name TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("users", "passwordChangeRequiresEmailConfirmation", "passwordChangeRequiresEmailConfirmation INTEGER NOT NULL DEFAULT 1");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS password_reset_tokens (
@@ -356,6 +483,7 @@ export class Store {
 
       const settings = {
         vaultTimeoutMinutes: normalizeVaultTimeoutMinutes(data.settings?.vaultTimeoutMinutes),
+        startupLibraries: data.settings?.startupLibraries ?? {},
         readingDefaults: normalizeReadingDefaults(data.settings?.readingDefaults)
       };
 
@@ -363,6 +491,8 @@ export class Store {
         .run("vaultTimeoutMinutes", String(settings.vaultTimeoutMinutes));
       this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)")
         .run("readingDefaults", JSON.stringify(settings.readingDefaults));
+
+      this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("startupLibraries", JSON.stringify(settings.startupLibraries));
 
       const insUser = this.db.prepare(`
         INSERT INTO users (id, username, displayName, email, avatarUrl, googleSub, nickname, biography, location, favoriteContentIds, canLogin, canDownload, canChangePassword, passwordChangeRequiresEmailConfirmation, lastActiveAt, role, passwordHash, allowedLibraryIds)
@@ -377,11 +507,11 @@ export class Store {
         insLib.run(l.id, l.name, l.kind, l.path, l.isPersonal ? 1 : 0, l.ownerUserId ?? null, l.lastScannedAt ?? null);
       }
 
-      const insProg = this.db.prepare("INSERT INTO progress (userId, contentId, currentPage, updatedAt) VALUES (?, ?, ?, ?)");
-      for (const p of data.progress) insProg.run(p.userId, p.contentId, p.currentPage, p.updatedAt);
+      const insProg = this.db.prepare("INSERT INTO progress (userId, contentId, currentPage, updatedAt, epubOffset) VALUES (?, ?, ?, ?, ?)");
+      for (const p of data.progress) insProg.run(p.userId, p.contentId, p.currentPage, p.updatedAt, p.epubOffset ?? 0);
 
-      const insBm = this.db.prepare("INSERT INTO bookmarks (userId, contentId, page, createdAt) VALUES (?, ?, ?, ?)");
-      for (const b of data.bookmarks) insBm.run(b.userId, b.contentId, b.page, b.createdAt);
+      const insBm = this.db.prepare("INSERT INTO bookmarks (userId, contentId, page, createdAt, name) VALUES (?, ?, ?, ?, ?)");
+      for (const b of data.bookmarks) insBm.run(b.userId, b.contentId, b.page, b.createdAt, b.name ?? "");
 
       const insSm = this.db.prepare("INSERT INTO series_marks (userId, contentId, createdAt) VALUES (?, ?, ?)");
       for (const s of data.seriesMarks) insSm.run(s.userId, s.contentId, s.createdAt);
@@ -421,6 +551,7 @@ export class Store {
   async read(): Promise<StoreShape> {
     const stmt = this.db.prepare("SELECT value FROM settings WHERE key = ?");
     const settingsRow = stmt.get("vaultTimeoutMinutes") as { value: string } | undefined;
+    const startupLibrariesRow = stmt.get("startupLibraries") as { value: string } | undefined;
     const readingDefaultsRow = stmt.get("readingDefaults") as { value: string } | undefined;
 
     const users = this.db.prepare("SELECT * FROM users").all().map(r => this.rowToUser(r as Record<string, unknown>));
@@ -450,6 +581,7 @@ export class Store {
 
     return {
       settings: {
+        startupLibraries: (parseSettingJson(startupLibrariesRow?.value) ?? {}) as Record<string, string>,
         vaultTimeoutMinutes: settingsRow ? Number(settingsRow.value) : defaultServerSettings.vaultTimeoutMinutes,
         readingDefaults: normalizeReadingDefaults(parseSettingJson(readingDefaultsRow?.value) ?? defaultServerSettings.readingDefaults)
       },
@@ -464,12 +596,13 @@ export class Store {
 
   async upsertProgress(progress: ReadingProgress): Promise<void> {
     this.db.prepare(`
-      INSERT INTO progress (userId, contentId, currentPage, updatedAt)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO progress (userId, contentId, currentPage, updatedAt, epubOffset)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(userId, contentId) DO UPDATE SET
         currentPage = excluded.currentPage,
-        updatedAt = excluded.updatedAt
-    `).run(progress.userId, progress.contentId, progress.currentPage, progress.updatedAt);
+        updatedAt = excluded.updatedAt,
+        epubOffset = excluded.epubOffset
+    `).run(progress.userId, progress.contentId, progress.currentPage, progress.updatedAt, progress.epubOffset ?? 0);
   }
 
   async removeProgress(userId: string, contentId: string): Promise<void> {
@@ -505,7 +638,9 @@ export class Store {
       .run(String(vaultTimeoutMinutes));
     this.db.prepare("INSERT INTO settings (key, value) VALUES ('readingDefaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(JSON.stringify(readingDefaults));
-    return { vaultTimeoutMinutes, readingDefaults };
+    const startupLibraries = { ...current.settings.startupLibraries, ...updates.startupLibraries };
+    this.db.prepare("INSERT INTO settings (key, value) VALUES ('startupLibraries', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(startupLibraries));
+    return { vaultTimeoutMinutes, readingDefaults, startupLibraries };
   }
 
   async updateUser(userId: string, updates: Partial<Pick<User, "email" | "displayName" | "username" | "avatarUrl" | "googleSub" | "nickname" | "biography" | "location" | "favoriteContentIds" | "canLogin" | "canDownload" | "canChangePassword" | "passwordChangeRequiresEmailConfirmation" | "allowedLibraryIds" | "passwordHash" | "role">>): Promise<User | null> {
@@ -769,6 +904,14 @@ export class Store {
     return row ?? null;
   }
 
+  async renameBookmark(userId: string, contentId: string, page: number, name: string): Promise<Bookmark | null> {
+    const result = this.db.prepare("UPDATE bookmarks SET name = ? WHERE userId = ? AND contentId = ? AND page = ?")
+      .run(name, userId, contentId, page);
+    if (!result.changes) return null;
+    return this.db.prepare("SELECT * FROM bookmarks WHERE userId = ? AND contentId = ? AND page = ?")
+      .get(userId, contentId, page) as Bookmark;
+  }
+
   async toggleBookmark(bookmark: Bookmark): Promise<{ marked: boolean }> {
     const existing = this.db.prepare("SELECT 1 FROM bookmarks WHERE userId = ? AND contentId = ? AND page = ?")
       .get(bookmark.userId, bookmark.contentId, bookmark.page);
@@ -779,8 +922,8 @@ export class Store {
       return { marked: false };
     }
 
-    this.db.prepare("INSERT INTO bookmarks (userId, contentId, page, createdAt) VALUES (?, ?, ?, ?)")
-      .run(bookmark.userId, bookmark.contentId, bookmark.page, bookmark.createdAt);
+    this.db.prepare("INSERT INTO bookmarks (userId, contentId, page, createdAt, name) VALUES (?, ?, ?, ?, ?)")
+      .run(bookmark.userId, bookmark.contentId, bookmark.page, bookmark.createdAt, bookmark.name ?? "");
     return { marked: true };
   }
 

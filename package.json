@@ -1,6 +1,6 @@
 {
   "name": "pugotiread",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Leitor web pessoal leve para homelab, inspirado por bibliotecas como Kavita.",
   "private": true,
   "type": "module",
@@ -8,15 +8,20 @@
     "dev": "npm run build && tsx watch src/server/index.ts",
     "build": "tsc --project tsconfig.json",
     "start": "node dist/server/index.js",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "test:browser:epub": "npm run build && node test/browser-epub-kindle.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.4.624",
     "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.17.10",
+    "playwright": "^1.64.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },

@@ -3,12 +3,12 @@ import type { ServerSettings } from "../../../shared/types.js";
 
 export const defaultVaultTimeoutMinutes = 5;
 export const defaultReadingDefaults: ServerSettings["readingDefaults"] = {
-  manga: { mode: "horizontal", fitting: "height", controlsVisible: false },
-  manhwa: { mode: "vertical-scroll", fitting: "width", controlsVisible: false },
-  book: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
-  comic: { mode: "horizontal", fitting: "height", controlsVisible: false },
-  lightNovel: { mode: "vertical-scroll", fitting: "height", controlsVisible: true },
-  other: { mode: "vertical-scroll", fitting: "height", controlsVisible: false }
+  manga: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: false },
+  manhwa: { mode: "vertical-scroll", fitting: "width", direction: "ltr", controlsVisible: false },
+  book: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: true },
+  comic: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: false },
+  lightNovel: { mode: "horizontal", fitting: "height", direction: "ltr", controlsVisible: true },
+  other: { mode: "vertical-scroll", fitting: "height", direction: "ltr", controlsVisible: false }
 };
 
 export const state: AppState = {
@@ -16,11 +16,13 @@ export const state: AppState = {
   libraries: [],
   personalLibraries: [],
   adminUsers: [],
+  pdfFormCopies: [],
   peopleUsers: [],
   contents: [],
   homeContents: [],
   readingNowContents: [],
   activeLibraryId: null,
+  activeLibraryFolder: '',
   loadingLibraryId: null,
   libraryLoadError: "",
   activeSeriesId: null,
@@ -105,7 +107,7 @@ export const state: AppState = {
   passwordResetMessage: "",
   passwordResetError: "",
   vaultUnlocked: false,
-  vaultHiddenFromMenu: localStorage.getItem("pugotiread-vault-hidden") === "true",
+  vaultHiddenFromMenu: true,
   vaultToken: "",
   vaultError: "",
   vaultTimeoutMinutes: defaultVaultTimeoutMinutes,

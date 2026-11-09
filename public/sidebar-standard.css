@@ -1,0 +1,84 @@
+/* Pugotilab navigation dimensions, measured from Pugotitasks (2026-10-09).
+   Scoped to the application sidebar; reader controls and content buttons are unaffected. */
+:root {
+  --pugoti-nav-icon: 21px;
+  --pugoti-nav-height: 44px;
+  --pugoti-nav-gap: 10px;
+  --pugoti-nav-radius: 11px;
+  --pugoti-nav-padding: 12px;
+  --pugoti-nav-rail: 76px;
+  --pugoti-nav-expanded: 264px;
+}
+.sidebar .nav-button,
+.sidebar .library-button,
+.sidebar .settings-nav-button,
+.sidebar .nav button,
+.sidebar-nav .nav-btn,
+#sidebar .nav {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--pugoti-nav-height) !important;
+  gap: var(--pugoti-nav-gap);
+  padding-block: 0 !important;
+  padding-inline: var(--pugoti-nav-padding);
+  border-radius: var(--pugoti-nav-radius);
+  align-items: center;
+}
+.sidebar .side-nav,
+.sidebar .library-list,
+.sidebar .nav,
+.sidebar-nav nav { gap: 5px !important; }
+#sidebar .nav { margin-bottom: 5px; }
+.sidebar .nav-icon,
+.sidebar .nav-icon .phosphor-icon,
+.sidebar .nav-icon svg,
+.sidebar .nav button > .mi,
+.sidebar .nav button > svg,
+.sidebar-nav .nav-btn .lucide-icon,
+.sidebar-nav .nav-btn .material-symbols-rounded,
+.sidebar-nav .nav-btn svg,
+#sidebar .nav > svg {
+  box-sizing: border-box;
+  width: var(--pugoti-nav-icon) !important;
+  height: var(--pugoti-nav-icon) !important;
+  min-width: var(--pugoti-nav-icon);
+  flex: 0 0 var(--pugoti-nav-icon);
+  font-size: var(--pugoti-nav-icon);
+  line-height: 1;
+}
+.sidebar .nav button > .mi { display: inline-flex; align-items: center; justify-content: center; }
+.sidebar .nav-button,
+.sidebar .library-button { grid-template-columns: var(--pugoti-nav-icon) minmax(0,1fr) 18px; }
+.sidebar .library-nav-item > .library-button,
+.sidebar .vault-nav-item > .library-button { padding-right: 38px; }
+#sidebar { width: var(--pugoti-nav-expanded); padding-inline: 10px; }
+@media (min-width: 721px) {
+  .app-shell.sidebar-collapsed:not(.reader-active):not(.settings-shell) { grid-template-columns: var(--pugoti-nav-rail) minmax(0,1fr); }
+  .app-shell:not(.sidebar-collapsed):not(.reader-active) { grid-template-columns: var(--pugoti-nav-expanded) minmax(0,1fr); }
+  .app-shell.settings-shell:not(.reader-active) { grid-template-columns: var(--pugoti-nav-expanded) minmax(0,1fr); }
+  .app-shell .sidebar { padding-inline: 10px; }
+  .app-shell.sidebar-collapsed .sidebar .nav-button,
+  .app-shell.sidebar-collapsed .sidebar .library-button { grid-template-columns: 1fr; padding-inline: 0; justify-items: center; }
+}
+@media (min-width: 801px) {
+  .shell { grid-template-columns: var(--pugoti-nav-expanded) minmax(0,1fr); }
+  .shell .sidebar { padding-inline: 10px; }
+}
+@media (min-width: 901px) {
+  .app-layout { grid-template-columns: var(--pugoti-nav-rail) minmax(0,1fr); }
+  body.sidebar-expanded .app-layout { grid-template-columns: var(--pugoti-nav-expanded) minmax(0,1fr); }
+  .sidebar-nav { width: var(--pugoti-nav-rail); padding-inline: 10px; }
+  body.sidebar-expanded .sidebar-nav { width: var(--pugoti-nav-expanded); }
+  body:not(.sidebar-expanded) .sidebar-nav .nav-btn { justify-content: center; padding-inline: 0; }
+}
+@media (max-width: 900px) {
+  .sidebar-nav, body.sidebar-expanded .sidebar-nav { width: min(86vw,310px); max-width: 310px; padding-inline: 10px; }
+}
+@media (max-width: 800px) {
+  .shell .sidebar { width: min(86vw,310px) !important; padding-inline: 10px !important; }
+  .shell .sidebar .nav button { padding-inline: var(--pugoti-nav-padding) !important; }
+}
+@media (max-width: 720px) {
+  .app-shell .sidebar { width: min(86vw,310px); max-width: 310px; padding-inline: 10px; }
+  #sidebar { width: min(86vw,310px); max-width: calc(100vw - 40px); }
+}

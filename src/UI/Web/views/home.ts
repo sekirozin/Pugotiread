@@ -1,6 +1,6 @@
 import type { ContentItem } from "../../../shared/types.js";
 import { renderIcon } from "../components/icons.js";
-import { renderSeriesCard } from "../components/series-card.js";
+import { isEpubBook, isPdfDocument, renderContentKindTag, renderEpubBookProgress, renderPdfDocumentSummary, renderSeriesCard } from "../components/series-card.js";
 import { hasRecentlyUpdatedChapters, isRecentlyUpdatedChapter } from "../services/recent-updates.js";
 import { filterContents } from "../services/search.js";
 import { state } from "../state/store.js";
@@ -20,16 +20,23 @@ function getChapterUpdatedAt(chapter: ContentItem["chapters"][number]): number {
 }
 
 function getContentLatestUpdateAt(content: ContentItem): number {
-  return content.chapters
+  const latestChapter = content.chapters
     .filter((chapter) => !chapter.isSpecial)
-    .reduce((latest, chapter) => Math.max(latest, getChapterUpdatedAt(chapter)), 0);
+    .reduce<ContentItem["chapters"][number] | null>((latest, chapter) => {
+      if (!latest || chapter.startPage > latest.startPage) {
+        return chapter;
+      }
+      return latest;
+    }, null);
+
+  return latestChapter ? getChapterUpdatedAt(latestChapter) : 0;
 }
 
 function getReleaseContents(): ContentItem[] {
   return getFilteredHomeContents()
     .map((content) => ({ content, updatedAt: getContentLatestUpdateAt(content) }))
     .filter((item) => item.updatedAt > 0)
-    .sort((a, b) => b.updatedAt - a.updatedAt || a.content.title.localeCompare(b.content.title, "pt-BR"))
+    .sort((a, b) => b.updatedAt - a.updatedAt || cleanTitle(a.content.title).localeCompare(cleanTitle(b.content.title), "pt-BR"))
     .map((item) => item.content);
 }
 
@@ -40,6 +47,10 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function cleanTitle(title: string): string {
+  return title.replace(/^\s*MANGA\s*LIVRE\s*[-:]?\s*/i, "").trim() || title;
 }
 
 function renderHomeLayoutButton(layout: "grid" | "list", label: string, icon: "grid" | "readerVertical"): string {
@@ -54,18 +65,15 @@ function renderHomeLayoutButton(layout: "grid" | "list", label: string, icon: "g
 function renderLatestChapterRows(content: ContentItem): string {
   const latestChapters = content.chapters
     .filter((chapter) => !chapter.isSpecial)
-    .map((chapter) => ({ chapter, updatedAt: getChapterUpdatedAt(chapter) }))
-    .filter((item) => item.updatedAt > 0)
-    .sort((a, b) => b.updatedAt - a.updatedAt || b.chapter.startPage - a.chapter.startPage)
+    .sort((a, b) => b.startPage - a.startPage)
     .slice(0, 3)
-    .map((item) => item.chapter);
 
   if (latestChapters.length === 0) {
     return `<p class="home-list-empty">Nenhum capítulo encontrado.</p>`;
   }
 
   return latestChapters.map((chapter) => `
-    <button class="home-list-chapter${isRecentlyUpdatedChapter(chapter) ? " recent-update" : ""}" data-chapter-open="${escapeHtml(content.id)}" data-chapter-start="${chapter.startPage}" type="button" aria-label="Abrir ${escapeHtml(chapter.name)} de ${escapeHtml(content.title)}">
+    <button class="home-list-chapter${isRecentlyUpdatedChapter(chapter) ? " recent-update" : ""}" data-chapter-open="${escapeHtml(content.id)}" data-chapter-start="${chapter.startPage}" type="button" aria-label="Abrir ${escapeHtml(chapter.name)} de ${escapeHtml(cleanTitle(content.title))}">
       <span class="chapter-status-dot" aria-hidden="true"></span>
       <span class="home-list-chapter-name">${escapeHtml(chapter.name)}</span>
       <span class="home-list-chapter-meta">${chapter.pageCount} pág.</span>
@@ -74,20 +82,21 @@ function renderLatestChapterRows(content: ContentItem): string {
 }
 
 function renderHomeListItem(content: ContentItem, index: number): string {
-  const hasRecentUpdate = hasRecentlyUpdatedChapters(content.chapters);
+  const hasRecentUpdate = !isPdfDocument(content) && hasRecentlyUpdatedChapters(content.chapters);
   return `
     <article class="home-list-item${hasRecentUpdate ? " recent-update" : ""}">
-      <button class="home-list-cover" data-series-open="${escapeHtml(content.id)}" type="button" aria-label="Abrir ${escapeHtml(content.title)}">
+      <button class="home-list-cover" data-series-open="${escapeHtml(content.id)}" type="button" aria-label="Abrir ${escapeHtml(cleanTitle(content.title))}">
         ${
           content.coverUrl
-            ? `<img src="${escapeHtml(content.coverUrl)}" alt="Capa de ${escapeHtml(content.title)}" loading="${index < 3 ? "eager" : "lazy"}" />`
-            : `<span>${escapeHtml(content.title.slice(0, 1).toUpperCase())}</span>`
+            ? `<img src="${escapeHtml(content.coverUrl)}" alt="Capa de ${escapeHtml(cleanTitle(content.title))}" loading="${index < 3 ? "eager" : "lazy"}" />`
+          : `<span>${escapeHtml(cleanTitle(content.title).slice(0, 1).toUpperCase())}</span>`
         }
+        ${renderContentKindTag(content)}
       </button>
       <div class="home-list-main">
-        <button class="home-list-title" data-series-open="${escapeHtml(content.id)}" type="button">${escapeHtml(content.title)}</button>
+        <button class="home-list-title" data-series-open="${escapeHtml(content.id)}" type="button">${escapeHtml(cleanTitle(content.title))}</button>
         <div class="home-list-chapters">
-          ${renderLatestChapterRows(content)}
+          ${isEpubBook(content) ? renderEpubBookProgress(content) : isPdfDocument(content) ? renderPdfDocumentSummary(content) : renderLatestChapterRows(content)}
         </div>
       </div>
     </article>

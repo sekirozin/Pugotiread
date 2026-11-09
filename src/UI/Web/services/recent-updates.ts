@@ -13,5 +13,12 @@ export function isRecentlyUpdatedChapter(chapter: Pick<ChapterInfo, "addedAt">):
 }
 
 export function hasRecentlyUpdatedChapters(chapters: ChapterInfo[]): boolean {
-  return chapters.some(isRecentlyUpdatedChapter);
+  const regularChapters = chapters.filter((chapter) => !chapter.isSpecial);
+  const latestChapter = regularChapters.reduce<ChapterInfo | null>((latest, chapter) => {
+    if (!latest || chapter.startPage > latest.startPage) {
+      return chapter;
+    }
+    return latest;
+  }, null);
+  return latestChapter ? isRecentlyUpdatedChapter(latestChapter) : false;
 }

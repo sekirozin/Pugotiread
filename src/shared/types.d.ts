@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "user";
+export type UserRole = "admin" | "superuser" | "user";
 export type LibraryKind = "manga" | "manhwa" | "book" | "other";
 export type PageMediaType = "image" | "pdf";
 export interface User {

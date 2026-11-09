@@ -3,10 +3,12 @@ import type {
   ContentItem,
   Invitation,
   Library,
+  PdfFormCopyAccess,
   LibraryKind,
   PublicContentReview,
   PublicUser,
   ReaderFittingMode,
+  ReaderDirection,
   ReaderMode,
   ReadingProgress,
   ServerSettings
@@ -31,6 +33,7 @@ export type FittingMode = ReaderFittingMode;
 
 export type SyncStatus = {
   state: "idle" | "running" | "completed" | "error";
+  isVault: boolean;
   target: string;
   libraryId: string | null;
   contentId: string | null;
@@ -50,6 +53,7 @@ export type SyncStatus = {
   lastSyncState: "completed" | "error" | null;
   lastSyncMessage: string;
   lastSyncSource: "manual" | "automatic" | null;
+  queuedDownloads: Array<{ target: string; queuedAt: string }>;
 };
 
 export type AppState = {
@@ -57,11 +61,13 @@ export type AppState = {
   libraries: Library[];
   personalLibraries: Library[];
   adminUsers: PublicUser[];
+  pdfFormCopies: PdfFormCopyAccess[];
   peopleUsers: PeopleUser[];
   contents: ContentItem[];
   homeContents: ContentItem[];
   readingNowContents: ContentItem[];
   activeLibraryId: string | null;
+  activeLibraryFolder: string;
   loadingLibraryId: string | null;
   libraryLoadError: string;
   activeSeriesId: string | null;
@@ -77,7 +83,7 @@ export type AppState = {
     | "library"
     | "profile"
     | "settings";
-  settingsSection: "account" | "server";
+  settingsSection: "account" | "server" | "download";
   serverSection: "libraries" | "sync" | "users" | "vault" | "reading";
   accountMenuOpen: boolean;
   statsMenuOpen: boolean;
@@ -141,7 +147,7 @@ export type AppState = {
   homeLayout: "grid" | "list";
   seriesChapterOrder: "asc" | "desc" | "last-read";
   seriesChapterLayout: "list" | "grid";
-  seriesTab: "chapters" | "specials" | "reviews";
+  seriesTab: "chapters" | "specials" | "reviews" | "bookmarks";
   seriesReviews: Record<string, PublicContentReview[]>;
   profileReviews: PublicContentReview[];
   seriesReviewError: string;
@@ -182,7 +188,7 @@ export type AppState = {
     displayName: string;
     username: string;
     password: string;
-    role: "admin" | "user";
+    role: "admin" | "superuser" | "user";
     allowedLibraryIds: string[];
     canLogin: boolean;
     canDownload: boolean;
@@ -193,9 +199,16 @@ export type AppState = {
     page: number;
     mode: ReaderMode;
     fitting: FittingMode;
+    direction: ReaderDirection;
     zoom: number;
     brightness: number;
-    bookTheme: "light" | "dark";
+    bookTheme: "light" | "sepia" | "dark";
+    epubOffset: number;
+    epubLengths: number[];
+    epubFont: "serif" | "sans";
+    epubFontSize: number;
+    epubLineHeight: number;
+    epubMargin: number;
     controlsVisible: boolean;
   } | null;
 };

@@ -1,9 +1,14 @@
+import { isPublicationCompleted, validRating } from "../../shared/work-metadata.js";
+import { observeReaderImages } from "./reader-image-window.js";
+import { clampEpubOffset, epubBookPercent, epubViewportOffset } from "./epub-progress.js";
+import { readerBudget, deviceHints, imagePrefetchOffsets } from "./reader-budget.js";
 import type {
   Bookmark,
   ContentItem,
   Invitation,
   Library,
   LibraryKind,
+  PdfFormCopyAccess,
   PublicContentReview,
   PublicUser,
   ReadingProgress,
@@ -11,29 +16,137 @@ import type {
 } from "../../shared/types.js";
 import { renderIcon, renderSidebarIcon } from "./components/icons.js";
 import { renderAvatar } from "./components/avatar.js";
-import { renderSidebar } from "./components/layout/sidebar.js";
-import { renderStatsMenu, renderTopbar } from "./components/layout/topbar.js";
-import { renderSeriesCard } from "./components/series-card.js";
+// @ts-ignore Versioned runtime module for browser and desktop caches.
+import { clearPdfFormDrafts } from "./pdf-form.js?v=rpg-personal-20260923";
+import { renderSidebar, renderLibraryContextMenu, renderVaultContextMenu, renderVaultNavButton } from "./components/layout/sidebar.js";
+import { renderStatsMenu, renderTopbar, renderAccountMenu } from "./components/layout/topbar.js";
+import { renderSeriesCard, renderSeriesContextMenu } from "./components/series-card.js";
 import { api } from "./services/api.js";
 import { filterContents, normalizeText, parseSearch } from "./services/search.js";
 import { state } from "./state/store.js";
+import { applyRouteToState, createRouter, parseRoute, type Route, type RouteContext } from "./router.js";
 import type { AppState, FittingMode, GoogleAccounts, GoogleConfig, PeopleUser, ReaderMode, SyncStatus, UserCollection } from "./state/types.js";
 import { renderHomeView } from "./views/home.js";
 import { renderLibraryView } from "./views/library.js";
+import { bindRpgPanel } from './views/rpg.js';
+import { renderPdfDetails } from './views/pdf-details.js';
 import { renderContentListView, renderEmptyMedia, renderNoSearchResults, renderPlaceholderView } from "./views/shared.js";
+// @ts-ignore A versão na URL invalida o módulo persistido pelo cache imutável do servidor.
+import { abrirPesquisaPdf, alvoEditavelPdf, aplicarZoomPdf, alternarSumarioPdf, encerrarLeitorPdf, fecharPesquisaPdf, iniciarLeitorPdf, navegarParaPaginaPdf, navegarRelativoPdf, obterPaginaAtualPdf, obterTotalPaginasPdf, pesquisaPdfAberta, pesquisarPdf, proximoResultadoPdf, resolverCliquePalcoLeitor } from "./pdf-viewer.js?v=reader-performance-20261016";
+// @ts-ignore A versão na URL invalida o módulo persistido pelo cache imutável do servidor.
+import { resolverAtalhoLeitor, resolverTeclaEpubIframe, type AcaoAtalhoLeitor } from "./reader-keyboard.js?v=kindle-reader-20261016";
 
 let vaultInactivityTimer: number | null = null;
 let lastVaultTouchAt = 0;
 let vaultTouchInFlight = false;
-let libraryLoadRequestId = 0;
 let passwordResetTokenPath = "";
 let syncStatusTimer: number | null = null;
 let lastAppliedSyncFinishedAt = "";
+let readerProgressSaveTimer: number | null = null;
+let directDownloadSubmitting = false;
+let readerScrollRaf: number | null = null;
+let readerLoadingTimer: number | null = null;
+let readerNavigationId = 0;
+let pendingReaderPage: number | null = null;
+let routeLoading = false;
+let globalSearchOpen = false;
+let globalSearchQuery = "";
+let globalSearchExtraContents: ContentItem[] = [];
+let globalSearchRequest = 0;
+const router = createRouter(window, applyAppRoute);
 
-const libraryOnlyKinds = new Set<LibraryKind>(["book", "lightNovel"]);
+type ReaderImageCacheEntry = {
+  image: HTMLImageElement;
+  ready: Promise<void>;
+};
+
+const readerImageCache = new Map<string, ReaderImageCacheEntry>();
+const readerLimits = readerBudget(deviceHints());
+let readerPrefetchDirection = 1;
+let readerPrefetchGeneration = 0;
+let epubPrefetch: AbortController | null = null;
+let epubProgressRaf: number | null = null;
+let epubPanel: "none" | "appearance" | "toc" = "none";
+let releaseReaderImageWindow: (() => void) | null = null;
+
+// Bibliotecas "other" permanecem acessíveis pela navegação própria, mas não
+// entram no catálogo geral nem nos lançamentos.
+const globallyListedLibraryKinds = new Set<LibraryKind>(["manga", "manhwa", "comic"]);
+// A mudança de elegibilidade das bibliotecas invalida a sessão anterior para
+// não restaurar lançamentos de bibliotecas "other" em uma versão nova do app.
+// v3: capítulos EPUB reais (TOC + marcadores) mudam a forma do conteúdo.
+const homeCachePrefix = "pugotiread-home-cache-v3";
 
 function getGloballyListedLibraries(libraries: Library[]): Library[] {
-  return libraries.filter((library) => !libraryOnlyKinds.has(library.kind));
+  return libraries.filter((library) => globallyListedLibraryKinds.has(library.kind));
+}
+
+function filterGloballyListedContents(contents: ContentItem[], libraries = state.libraries): ContentItem[] {
+  const globallyListedLibraryIds = new Set(getGloballyListedLibraries(libraries).map((library) => library.id));
+  return contents.filter((content) => globallyListedLibraryIds.has(content.libraryId));
+}
+
+function getHomeCacheKey(): string | null {
+  return state.user?.id ? `${homeCachePrefix}:${state.user.id}` : null;
+}
+
+function restoreHomeCache(): boolean {
+  const key = getHomeCacheKey();
+  if (!key) {
+    return false;
+  }
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) {
+      return false;
+    }
+    const cached = JSON.parse(raw) as Partial<Pick<AppState, "libraries" | "progress" | "bookmarks" | "seriesMarks" | "wantToRead" | "readingList" | "collections" | "profileReviews" | "peopleUsers" | "homeContents" | "readingNowContents">>;
+    if (!Array.isArray(cached.libraries) || !Array.isArray(cached.homeContents)) {
+      return false;
+    }
+    state.libraries = cached.libraries;
+    state.progress = cached.progress ?? [];
+    state.bookmarks = cached.bookmarks ?? [];
+    state.seriesMarks = cached.seriesMarks ?? [];
+    state.wantToRead = cached.wantToRead ?? [];
+    state.readingList = cached.readingList ?? [];
+    state.collections = cached.collections ?? [];
+    state.profileReviews = cached.profileReviews ?? [];
+    state.peopleUsers = cached.peopleUsers ?? [];
+    state.homeContents = filterGloballyListedContents(cached.homeContents);
+    state.readingNowContents = filterGloballyListedContents(cached.readingNowContents ?? cached.homeContents);
+    state.activeLibraryId = null;
+    state.activeSeriesId = null;
+    state.activeView = "home";
+    return true;
+  } catch {
+    sessionStorage.removeItem(key);
+    return false;
+  }
+}
+
+function saveHomeCache(): void {
+  const key = getHomeCacheKey();
+  if (!key) {
+    return;
+  }
+  try {
+    sessionStorage.setItem(key, JSON.stringify({
+      libraries: state.libraries,
+      progress: state.progress,
+      bookmarks: state.bookmarks,
+      seriesMarks: state.seriesMarks,
+      wantToRead: state.wantToRead,
+      readingList: state.readingList,
+      collections: state.collections,
+      profileReviews: state.profileReviews,
+      peopleUsers: state.peopleUsers,
+      homeContents: state.homeContents,
+      readingNowContents: state.readingNowContents
+    }));
+  } catch {
+    // A full cache is an optimization only; quota/private browsing must not block startup.
+  }
 }
 
 declare global {
@@ -58,18 +171,26 @@ if (!appElement) {
 
 const app = appElement;
 
-function renderReaderModeIcon(): string {
-  if (!state.reader) {
-    return renderIcon("readerVertical");
-  }
-  if (state.reader.mode === "horizontal") {
-    return renderIcon("readerHorizontal");
-  }
-  return renderIcon("readerVertical");
-}
+type FullscreenDocument = Document & { webkitFullscreenElement?: Element; webkitFullscreenEnabled?: boolean; webkitExitFullscreen?: () => Promise<void> | void };
+type FullscreenElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+let readerFullscreenPending = false;
 
 function isReaderFullscreen(): boolean {
-  return Boolean(document.fullscreenElement);
+  const reader = document.querySelector(".reader");
+  const fullscreen = document.fullscreenElement ?? (document as FullscreenDocument).webkitFullscreenElement;
+  return Boolean(reader && fullscreen && (fullscreen === reader || fullscreen === document.documentElement));
+}
+
+function isReaderFullscreenAvailable(): boolean {
+  const root = document.documentElement as FullscreenElement;
+  return Boolean((document.fullscreenEnabled && root.requestFullscreen) ||
+    ((document as FullscreenDocument).webkitFullscreenEnabled !== false && root.webkitRequestFullscreen));
+}
+
+async function exitReaderFullscreen(): Promise<void> {
+  if (!isReaderFullscreen()) return;
+  if (document.exitFullscreen) await document.exitFullscreen();
+  else await (document as FullscreenDocument).webkitExitFullscreen?.();
 }
 
 function isMobileViewport(): boolean {
@@ -82,6 +203,18 @@ function renderReaderFullscreenIcon(): string {
 
 function getReaderFullscreenLabel(): string {
   return isReaderFullscreen() ? "Sair da tela cheia" : "Tela cheia";
+}
+
+function renderIconeToolbarPdf(caminho: string): string {
+  return `<svg class="reader-pdf-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${caminho}"></path></svg>`;
+}
+
+function renderIconeMarcadorPdf(marcado: boolean): string {
+  return `<svg class="reader-pdf-toolbar-icon" viewBox="0 0 24 24" fill="${marcado ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-3l-6 3z"></path></svg>`;
+}
+
+function renderIconeImprimirPdf(): string {
+  return `<svg class="reader-pdf-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"></path><path d="M6 18H4a2 2 0 0 1-2-2v-5a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v5a2 2 0 0 1-2 2h-2"></path><path d="M7 14h10v7H7z"></path><path d="M17 12h.01"></path></svg>`;
 }
 
 function getPasswordResetTokenFromPath(): string {
@@ -200,7 +333,7 @@ async function mountGoogleButton(
 }
 
 function closeFloatingMenusFromOutside(target: EventTarget | null): void {
-  const element = target instanceof HTMLElement ? target : null;
+  const element = target instanceof Element ? target : null;
   let changed = false;
 
   if (state.statsMenuOpen && (!element || !element.closest(".stats-menu-shell"))) {
@@ -234,30 +367,19 @@ function closeFloatingMenusFromOutside(target: EventTarget | null): void {
   }
 
   if (changed) {
-    renderShell();
+    renderNavigationMenus();
   }
 }
 
 function closeSidebarFromOutside(target: EventTarget | null): void {
-  const element = target instanceof HTMLElement ? target : null;
-  if (element?.closest('.sidebar, #menu-button')) {
-    return;
-  }
-
-  const shell = document.querySelector('.app-shell');
-  const button = document.querySelector<HTMLButtonElement>('#menu-button');
+  const element = target instanceof Element ? target : null;
+  if (element?.closest('.sidebar, #menu-button')) return;
   if (isMobileViewport() && state.mobileNavOpen) {
-    state.mobileNavOpen = false;
-    shell?.classList.remove('mobile-nav-open');
-    document.querySelector('#mobile-nav-backdrop')?.remove();
-    button?.setAttribute('aria-expanded', 'false');
-    return;
-  }
-
-  if (!isMobileViewport() && !state.sidebarCollapsed) {
+    closeMobileNavigation();
+    updateNavigationLayout();
+  } else if (!isMobileViewport() && !state.sidebarCollapsed) {
     state.sidebarCollapsed = true;
-    shell?.classList.add('sidebar-collapsed');
-    button?.setAttribute('aria-expanded', 'false');
+    updateNavigationLayout();
   }
 }
 
@@ -276,19 +398,104 @@ function closeMobileNavigation(): void {
 }
 
 function openView(view: AppState["activeView"]): void {
+  if (view === "library") {
+    if (state.activeLibraryId) void loadLibrary(state.activeLibraryId);
+    return;
+  }
+  void router.navigate({ kind: "view", view });
+}
+
+async function applyAppRoute(route: Route, context: RouteContext): Promise<void> {
+  if (route.kind === "view" && route.view === "vault" && (state.user?.role !== "admin" || state.vaultHiddenFromMenu)) {
+    await router.replaceRoute({ kind: "view", view: "home" });
+    return;
+  }
+  if (route.kind === "person" && !state.peopleUsers.some((user) => user.id === route.userId)) {
+    await router.replaceRoute({ kind: "view", view: "people" });
+    return;
+  }
+  if ("libraryId" in route && ![...state.libraries, ...state.personalLibraries].some((library) => library.id === route.libraryId)) {
+    await router.replaceRoute({ kind: "view", view: "home" });
+    return;
+  }
+  clearReaderLoadingTimer();
+  readerPrefetchGeneration += 1;
+  epubPrefetch?.abort();
+  epubPrefetch = null;
+  readerImageCache.clear();
+  releaseReaderImageWindow?.();
+  releaseReaderImageWindow = null;
+  encerrarLeitorPdf();
+  pendingReaderPage = null;
+  readerNavigationId += 1;
+  if (state.reader && route.kind !== "reader") void exitReaderFullscreen().catch(() => undefined);
   closeNavigationPanels();
   closeMobileNavigation();
-  state.activeView = view;
-  state.activeLibraryId = null;
-  state.activeSeriesId = null;
-  state.activePeopleUserId = null;
-  state.reader = null;
+  state.libraryModalOpen = false;
+  state.collectionModalOpen = false;
+  state.collectionShareModalOpen = false;
+  state.deletingCollectionId = null;
+  state.adminUserModalOpen = false;
+  state.adminUserDeleteId = null;
+  state.profileEditing = false;
+  state.search = "";
+  state.seriesTab = "chapters";
+  state.seriesReviewError = "";
+  applyRouteToState(state, route);
+  routeLoading = false;
+  state.loadingLibraryId = null;
+  state.libraryLoadError = "";
+
+  if ("libraryId" in route) {
+    let content = "contentId" in route ? findContentById(route.contentId) : null;
+    if (content?.libraryId !== route.libraryId) content = null;
+    if (route.kind === "library" || !content) {
+      routeLoading = route.kind !== "library";
+      state.contents = [];
+      state.loadingLibraryId = route.libraryId;
+      renderShell();
+      try {
+        const payload = await api<{ contents: ContentItem[] }>(`/api/libraries/${encodeURIComponent(route.libraryId)}/contents`);
+        if (!context.isCurrent()) return;
+        state.contents = payload.contents;
+        content = "contentId" in route ? payload.contents.find((item) => item.id === route.contentId && item.libraryId === route.libraryId) ?? null : null;
+      } catch (error) {
+        if (!context.isCurrent()) return;
+        state.libraryLoadError = error instanceof Error ? error.message : "Não foi possível carregar a biblioteca.";
+      }
+      state.loadingLibraryId = null;
+      routeLoading = false;
+    }
+    if (route.kind !== "library") {
+      if (!content) {
+        await router.replaceRoute({ kind: "library", libraryId: route.libraryId });
+        return;
+      }
+      if (route.kind === "reader") {
+        activateReader(content, route.page - 1);
+        syncReaderRoute();
+      }
+    }
+  }
   renderShell();
+  if (route.kind === "title" && findContentById(route.contentId)?.pageTypes.join(',') !== 'pdf') {
+    await loadSeriesReviews(route.contentId).catch(() => undefined);
+    if (context.isCurrent()) renderShell();
+  }
+  if (route.kind === "view" && route.view === "bookmarks") void loadMarkedPages();
+  if (route.kind === "view" && route.view === "collections") void loadCollectionContents();
+}
+
+function syncReaderRoute(): void {
+  if (!state.reader) return;
+  const { content, page } = state.reader;
+  void router.replaceRoute({ kind: "reader", libraryId: content.libraryId, contentId: content.id, page: page + 1 }, false);
 }
 
 document.addEventListener("click", (event) => {
   closeFloatingMenusFromOutside(event.target);
   closeSidebarFromOutside(event.target);
+  closeGlobalSearchFromOutside(event.target);
 });
 
 ["click", "keydown", "pointermove", "scroll"].forEach((eventName) => {
@@ -352,7 +559,10 @@ async function boot(): Promise<void> {
       renderNicknameSetup();
       return;
     }
-    renderLoadingScreen();
+    const restoredHome = restoreHomeCache();
+    if (!restoredHome) {
+      renderLoadingScreen();
+    }
     await loadHome();
     startSyncStatusPolling();
   } catch {
@@ -391,7 +601,12 @@ async function loadInviteFlow(): Promise<void> {
   }
 }
 
+let startupLibraries: Record<string, string> = {};
+let startupSelectedUserId = "";
+
 async function loadHome(): Promise<void> {
+  const readingSettings = api<{ readingDefaults: ServerSettings["readingDefaults"] }>("/api/me/reading-settings");
+  const startup = await api<{ libraryId: string | null }>("/api/me/startup").catch(() => ({ libraryId: null }));
   const requests: Promise<unknown>[] = [
     api<{ libraries: Library[] }>("/api/libraries"),
     api<{ progress: ReadingProgress[] }>("/api/continue"),
@@ -405,9 +620,10 @@ async function loadHome(): Promise<void> {
   if (state.user?.role === "admin") {
     requests.push(api<{ users: PublicUser[]; libraries: Library[] }>("/api/admin/users"));
     requests.push(api<{ settings: ServerSettings }>("/api/admin/settings"));
+    requests.push(api<{ copies: PdfFormCopyAccess[] }>("/api/admin/pdf-form-copies"));
   }
 
-  const [librariesPayload, progressPayload, bookmarksPayload, seriesMarksPayload, userListsPayload, reviewsPayload, usersPayload, adminPayload, settingsPayload] = await Promise.all(requests);
+  const [librariesPayload, progressPayload, bookmarksPayload, seriesMarksPayload, userListsPayload, reviewsPayload, usersPayload, adminPayload, settingsPayload, pdfCopiesPayload] = await Promise.all(requests);
   const { libraries } = librariesPayload as { libraries: Library[] };
   const { progress } = progressPayload as { progress: ReadingProgress[] };
   const { bookmarks } = bookmarksPayload as { bookmarks: Bookmark[] };
@@ -435,14 +651,17 @@ async function loadHome(): Promise<void> {
     state.vaultTimeoutMinutes = settings.vaultTimeoutMinutes;
     state.vaultSettingsDraft = String(settings.vaultTimeoutMinutes);
     state.readingSettingsDraft = settings.readingDefaults;
+    startupLibraries = settings.startupLibraries ?? {};
   }
+  state.readingSettingsDraft = (await readingSettings).readingDefaults;
+  if (pdfCopiesPayload) state.pdfFormCopies = (pdfCopiesPayload as { copies: PdfFormCopyAccess[] }).copies;
   const visibleLibraries = state.libraries;
   state.homeContents = await loadLibraryContents(getGloballyListedLibraries(visibleLibraries));
-  state.readingNowContents = await loadLibraryContents(visibleLibraries);
-  state.activeLibraryId = null;
-  state.activeSeriesId = null;
-  state.activeView = "home";
-  renderShell();
+  state.readingNowContents = await loadLibraryContents(getGloballyListedLibraries(visibleLibraries));
+  saveHomeCache();
+  // Successful invitation registration has finished its dedicated auth flow.
+  if (window.location.pathname.startsWith("/invite/")) await router.replaceRoute({ kind: "view", view: "home" }, false);
+  await router.start(startup.libraryId ? { kind: "library", libraryId: startup.libraryId } : undefined);
 }
 
 async function loadLibraryContents(libraries: Library[]): Promise<ContentItem[]> {
@@ -455,38 +674,21 @@ async function loadLibraryContents(libraries: Library[]): Promise<ContentItem[]>
   return responses.flatMap((response) => response.contents);
 }
 
-async function loadLibrary(libraryId: string): Promise<void> {
-  const requestId = ++libraryLoadRequestId;
-  state.activeLibraryId = libraryId;
-  state.activeSeriesId = null;
-  state.activeView = "library";
-  state.reader = null;
-  state.search = "";
-  state.contents = [];
-  state.loadingLibraryId = libraryId;
-  state.libraryLoadError = "";
-  renderShell();
+async function loadCollectionContents(): Promise<void> {
+  const listPayload = await api<{ contents?: ContentItem[] }>("/api/user-lists?includeContents=1").catch(() => ({ contents: [] }));
+  const libraryIds = new Set(state.collections.flatMap((collection) => collection.contentIds.map((id) => id.split(":", 1)[0]).filter(Boolean)));
+  const libraries = state.libraries.filter((library) => libraryIds.has(library.id));
+  const contents = await loadLibraryContents(libraries.length ? libraries : state.libraries);
+  const merged = new Map([...state.homeContents, ...state.readingNowContents, ...state.contents].map((item) => [item.id, item]));
+  for (const content of contents) merged.set(content.id, content);
+  for (const content of listPayload.contents ?? []) merged.set(content.id, content);
+  if (state.activeView !== "collections" || state.activeSeriesId || state.reader) return;
+  state.contents = [...merged.values()];
+  if (state.activeView === "collections") renderShell();
+}
 
-  try {
-    const { contents } = await api<{ contents: ContentItem[] }>(`/api/libraries/${libraryId}/contents`);
-    if (requestId !== libraryLoadRequestId) {
-      return;
-    }
-    state.contents = contents;
-    state.libraryLoadError = "";
-  } catch (error) {
-    if (requestId !== libraryLoadRequestId) {
-      return;
-    }
-    state.contents = [];
-    state.libraryLoadError = error instanceof Error ? error.message : "Não foi possível carregar a biblioteca.";
-  } finally {
-    if (requestId !== libraryLoadRequestId) {
-      return;
-    }
-    state.loadingLibraryId = null;
-  }
-  renderShell();
+async function loadLibrary(libraryId: string): Promise<void> {
+  await router.navigate({ kind: "library", libraryId });
 }
 
 function renderLogin(error = ""): void {
@@ -557,7 +759,7 @@ function renderPasswordResetPage(error = ""): void {
   `;
 
   document.querySelector("#back-to-login-from-reset")?.addEventListener("click", () => {
-    window.history.replaceState({}, "", "/");
+    void router.replaceRoute({ kind: "view", view: "home" }, false);
     clearPasswordResetState();
     renderLogin();
   });
@@ -578,7 +780,7 @@ function renderPasswordResetPage(error = ""): void {
         method: "POST",
         body: JSON.stringify({ newPassword })
       });
-      window.history.replaceState({}, "", "/");
+      void router.replaceRoute({ kind: "view", view: "home" }, false);
       clearPasswordResetState();
       renderLogin("Senha alterada. Faça login novamente.");
     } catch (resetError) {
@@ -814,11 +1016,25 @@ function renderNicknameSetup(error = ""): void {
 }
 
 function renderShell(): void {
+  if (state.reader?.content.pageTypes.includes("epub")) {
+    const currentFrame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+    if (currentFrame && Number(currentFrame.dataset.readerPageIndex) === state.reader.page) {
+      state.reader.epubOffset = getEpubCurrentOffset(currentFrame);
+    }
+  }
+  releaseReaderImageWindow?.();
+  releaseReaderImageWindow = null;
+  if (routeLoading) { renderLoadingScreen("Carregando título"); return; }
   const activeLibrary = [...state.libraries, ...state.personalLibraries].find((library) => library.id === state.activeLibraryId);
   const activeSeries = getSelectedSeries();
   const filtered = filterContents(state.contents, state.search);
   const userName = state.user?.nickname || state.user?.displayName || state.user?.username || "Usuário";
   const mobileNavOpen = state.mobileNavOpen && isMobileViewport();
+  document.documentElement.classList.toggle("mobile-menu-open", mobileNavOpen);
+  document.body.classList.toggle("mobile-menu-open", mobileNavOpen);
+  const readerRestorePage = state.reader?.mode === "vertical-scroll" && !state.reader.content.pageTypes.includes("pdf")
+    ? (getVisibleReaderPage() ?? state.reader.page)
+    : null;
 
   app.innerHTML = `
     <div class="app-shell${state.activeView === "settings" ? " settings-shell" : ""}${state.sidebarCollapsed ? " sidebar-collapsed" : ""}${mobileNavOpen ? " mobile-nav-open" : ""}${state.reader ? " reader-active" : ""}">
@@ -840,6 +1056,7 @@ function renderShell(): void {
       ${state.deletingCollectionId ? renderCollectionDeleteModal() : ""}
       ${state.adminUserModalOpen ? renderAdminUserModal() : ""}
       ${state.adminUserDeleteId ? renderUserDeleteModal() : ""}
+      ${globalSearchOpen && !state.reader ? renderGlobalSearchModal() : ""}
     </div>
   `;
 
@@ -847,8 +1064,101 @@ function renderShell(): void {
 
   if (state.reader) {
     renderReaderOverlay();
+    bindReaderPdfHomeButton();
     bindReaderEpubFrames();
+    bindReaderEpubSearch();
+    bindReaderMediaLoadState();
+    bindReaderPdfViewer();
+    const imageStage = document.getElementById("reader-stage");
+    if (imageStage && state.reader.mode === "vertical-scroll") releaseReaderImageWindow = observeReaderImages(imageStage);
+    preloadAdjacentReaderPages(state.reader.content, state.reader.page);
+    if (readerRestorePage !== null && state.reader.mode === "vertical-scroll" && !state.reader.content.pageTypes.includes("epub")) {
+      requestAnimationFrame(() => scrollReaderToPage(readerRestorePage));
+    }
   }
+}
+
+// Menu changes must not recreate cards, PDF canvases, EPUB frames or their listeners.
+const menuMarkup = new WeakMap<Element, string>();
+
+function syncFloatingMenu(trigger: HTMLElement | null, host: Element | null, selector: string, markup: string): void {
+  if (!host) return;
+  const previous = host.querySelector<HTMLElement>(`:scope > ${selector}`);
+  trigger?.setAttribute("aria-expanded", String(Boolean(markup)));
+  if (!markup) {
+    const hadFocus = previous?.contains(document.activeElement);
+    previous?.remove();
+    if (hadFocus) trigger?.focus({ preventScroll: true });
+    return;
+  }
+  if (previous && menuMarkup.get(previous) === markup) return;
+  const focused = previous?.contains(document.activeElement) ? document.activeElement : null;
+  const focusSelector = focused instanceof HTMLElement
+    ? Array.from(focused.attributes).filter(attribute => attribute.name === "id" || attribute.name.startsWith("data-"))
+      .map(attribute => `[${attribute.name}="${CSS.escape(attribute.value)}"]`).join("")
+    : "";
+  const template = document.createElement("template");
+  template.innerHTML = markup.trim();
+  const next = template.content.firstElementChild as HTMLElement | null;
+  if (!next) return;
+  menuMarkup.set(next, markup);
+  if (previous) previous.replaceWith(next); else host.append(next);
+  bindShellEvents(next);
+  if (focused) (focusSelector ? next.querySelector<HTMLElement>(focusSelector) ?? trigger : trigger)?.focus({ preventScroll: true });
+}
+
+function updateNavigationLayout(): void {
+  const open = state.mobileNavOpen && isMobileViewport();
+  document.documentElement.classList.toggle("mobile-menu-open", open);
+  document.body.classList.toggle("mobile-menu-open", open);
+  const shell = document.querySelector(".app-shell");
+  shell?.classList.toggle("mobile-nav-open", open);
+  shell?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+  document.querySelector("#menu-button")?.setAttribute("aria-expanded", String(isMobileViewport() ? open : !state.sidebarCollapsed));
+  const backdrop = document.querySelector("#mobile-nav-backdrop");
+  if (!open) backdrop?.remove();
+  else if (!backdrop && shell) {
+    const button = document.createElement("button");
+    button.id = "mobile-nav-backdrop";
+    button.className = "mobile-nav-backdrop";
+    button.type = "button";
+    button.setAttribute("aria-label", "Fechar menu");
+    button.addEventListener("click", () => { closeMobileNavigation(); updateNavigationLayout(); });
+    shell.append(button);
+  }
+}
+
+function renderNavigationMenus(): void {
+  const userName = state.user?.nickname || state.user?.displayName || state.user?.username || "Usuário";
+  syncFloatingMenu(document.querySelector("#account-button"), document.querySelector(".account-menu-shell"), "#account-menu", state.accountMenuOpen ? renderAccountMenu(userName) : "");
+  syncFloatingMenu(document.querySelector("#stats-button"), document.querySelector(".stats-menu-shell"), "#stats-menu", state.statsMenuOpen ? renderStatsMenu() : "");
+
+  const nav = document.querySelector("#mobile-sidebar");
+  const vault = nav?.querySelector(".vault-nav-item");
+  if (state.user?.role !== "admin" || state.vaultHiddenFromMenu) vault?.remove();
+  else if (nav && !vault) {
+    const template = document.createElement("template");
+    template.innerHTML = renderVaultNavButton().trim();
+    const next = template.content.firstElementChild!;
+    nav.insertBefore(next, nav.querySelector('[data-nav-view="people"]'));
+    bindShellEvents(next);
+  }
+  syncFloatingMenu(document.querySelector("[data-vault-menu]"), document.querySelector(".vault-nav-item"), ".library-context-menu", state.vaultMenuOpen && !state.vaultHiddenFromMenu ? renderVaultContextMenu() : "");
+
+  const librarySelector = '[data-library-menu-id][aria-expanded="true"]' + (state.openLibraryMenuId ? `, [data-library-menu-id="${CSS.escape(state.openLibraryMenuId)}"]` : "");
+  document.querySelectorAll<HTMLElement>(librarySelector).forEach(button => {
+    const library = state.libraries.find(item => item.id === button.dataset.libraryMenuId);
+    syncFloatingMenu(button, button.closest(".library-nav-item"), ".library-context-menu", library && state.openLibraryMenuId === library.id ? renderLibraryContextMenu(library) : "");
+  });
+  const seriesSelector = '[data-series-menu-key][aria-expanded="true"]' + (state.openSeriesMenuId ? `, [data-series-menu-key="${CSS.escape(state.openSeriesMenuId)}"]` : "");
+  document.querySelectorAll<HTMLElement>(seriesSelector).forEach(button => {
+    const card = button.closest(".series-card");
+    const id = card?.querySelector<HTMLElement>("[data-series-open]")?.dataset.seriesOpen;
+    const content = id ? findContentById(id) : null;
+    const key = button.dataset.seriesMenuKey ?? "";
+    syncFloatingMenu(button, card, ".series-context-menu", content && state.openSeriesMenuId === key ? renderSeriesContextMenu(content, key) : "");
+  });
+  updateNavigationLayout();
 }
 
 function renderMainView(activeLibrary: Library | undefined, contents: ContentItem[], activeSeries: ContentItem | null): string {
@@ -861,8 +1171,7 @@ function renderMainView(activeLibrary: Library | undefined, contents: ContentIte
   }
 
   if (state.activeView === "bookmarks") {
-    const contentIds = new Set(state.bookmarks.map((bookmark) => bookmark.contentId));
-    return renderContentListView("Marcadores", "Obras com páginas marcadas por este usuário.", getContentsByIds([...contentIds]));
+    return renderMarkedPagesView();
   }
 
   if (state.activeView === "home") {
@@ -1252,6 +1561,7 @@ function updateProfileFavoriteResults(): void {
 function getSettingsSectionTitle(): string {
   const titles: Record<AppState["settingsSection"], string> = {
     account: "Conta",
+    download: "Download",
     server: state.serverSection === "users"
       ? "Usuários"
       : state.serverSection === "sync"
@@ -1267,6 +1577,11 @@ function getSettingsSectionTitle(): string {
 }
 
 function renderSettingsSection(): string {
+  if (state.settingsSection === "download") {
+    return state.user?.role === "admin" || state.user?.role === "superuser"
+      ? renderDownloadSettings()
+      : `<p class="empty">Esta área é exclusiva para administradores.</p>`;
+  }
   if (state.settingsSection === "server") {
     if (state.user?.role !== "admin") {
       return `<p class="empty">Esta área é exclusiva para administradores.</p>`;
@@ -1287,7 +1602,7 @@ function renderSettingsSection(): string {
       </div>
       <div class="settings-row">
         <span>Tipo</span>
-        <strong>${escapeHtml(state.user?.role === "admin" ? "Administrador" : "Usuário padrão")}</strong>
+        <strong>${escapeHtml(state.user?.role === "admin" ? "Administrador" : state.user?.role === "superuser" ? "Superuser" : "Usuário padrão")}</strong>
       </div>
     </div>
   `;
@@ -1305,7 +1620,46 @@ function renderLibrariesSettings(): string {
         ? `<div class="library-settings-list">${state.libraries.map(renderLibrarySettingsRow).join("")}</div>`
         : `<p class="empty">Nenhuma biblioteca cadastrada. Crie uma biblioteca apontando para uma pasta dentro de /media.</p>`
     }
+    ${renderStartupSettings()}
+    ${renderPdfFormAccessSettings()}
   `;
+}
+
+function renderPdfFormAccessSettings(): string {
+  const rows = state.pdfFormCopies.map(copy => {
+    const content = state.homeContents.find(item => item.id === copy.contentId);
+    return `<form class="settings-panel pdf-copy-access" data-pdf-copy-access="${escapeHtml(copy.contentId)}">
+      <div class="settings-row"><span>Ficha</span><strong>${escapeHtml(content?.title ?? copy.title ?? "Ficha PDF")}</strong></div>
+      <div class="pdf-copy-access-fields">
+        <label>Proprietário<select class="input" name="ownerUserId">${state.adminUsers.map(person => `<option value="${escapeHtml(person.id)}" ${person.id === copy.ownerUserId ? "selected" : ""}>${escapeHtml(person.username || person.displayName)}</option>`).join("")}</select></label>
+        <label>Visibilidade<select class="input" name="visibility">
+          <option value="private" ${copy.visibility === "private" ? "selected" : ""}>Somente proprietário</option>
+          <option value="shared" ${copy.visibility === "shared" ? "selected" : ""}>Usuários selecionados</option>
+          <option value="public" ${copy.visibility === "public" ? "selected" : ""}>Todos da biblioteca</option>
+        </select></label>
+        <label>Sistema<input class="input" name="system" maxlength="80" value="${escapeHtml(copy.system)}" placeholder="Ex.: Tormenta Clássico"></label>
+      </div>
+      <fieldset class="pdf-copy-sharing"><legend>Compartilhar com</legend>${state.adminUsers.filter(person => person.id !== copy.ownerUserId).map(person => `<label><input type="checkbox" name="sharedWithUserIds" value="${escapeHtml(person.id)}" ${copy.sharedWithUserIds.includes(person.id) ? "checked" : ""}> ${escapeHtml(person.username || person.displayName)}</label>`).join("")}</fieldset>
+      <div><button class="button" type="submit">Salvar acesso</button> <span role="status" aria-live="polite"></span></div>
+    </form>`;
+  }).join("");
+  return `<section class="pdf-copy-settings"><h3>Fichas preenchidas</h3><p class="settings-lead">Cada ficha pertence ao usuário que criou a cópia. O administrador pode transferir a propriedade ou ampliar o acesso.</p>${rows || `<p class="empty">Nenhuma ficha preenchida encontrada.</p>`}</section>`;
+}
+
+function renderStartupSettings(): string {
+  const user = state.adminUsers.find(item => item.id === startupSelectedUserId) ?? state.adminUsers[0];
+  startupSelectedUserId = user?.id ?? "";
+  return `<section class="startup-settings"><h3>Página inicial</h3>
+    <p class="settings-lead">Selecione o usuário e escolha onde ele inicia ao abrir o Pugotiread. A escolha é salva automaticamente.</p>
+    <div class="startup-setting-row">
+      <label>Usuário<select class="input" id="startup-user-select" ${user ? "" : "disabled"}>
+        ${state.adminUsers.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === user?.id ? "selected" : ""}>${escapeHtml(item.username || item.displayName)}</option>`).join("")}
+      </select></label>
+      <label>Biblioteca inicial<select class="input" data-startup-user="${escapeHtml(user?.id ?? "")}" ${user ? "" : "disabled"}><option value="">Início</option>
+        ${state.libraries.filter(library => user && !library.isPersonal && (user.role === "admin" || user.allowedLibraryIds.includes(library.id))).map(library => `<option value="${escapeHtml(library.id)}" ${startupLibraries[user!.id] === library.id ? "selected" : ""}>${escapeHtml(library.name)}</option>`).join("")}
+      </select></label>
+      <span data-startup-status role="status" aria-live="polite"></span>
+    </div></section>`;
 }
 
 function renderUsersSettings(): string {
@@ -1349,7 +1703,7 @@ function renderSyncSettings(): string {
           ? `
             <label class="form-row">
               <span>Biblioteca</span>
-              <select class="input" id="sync-library-select" name="libraryId" ${state.syncRunning ? "disabled" : ""}>
+              <select class="input" id="sync-library-select" name="libraryId">
                 ${libraries.map((library) => `
                   <option value="${escapeHtml(library.id)}" ${library.id === selectedLibraryId ? "selected" : ""}>${escapeHtml(library.name)}</option>
                 `).join("")}
@@ -1357,7 +1711,7 @@ function renderSyncSettings(): string {
             </label>
             <label class="form-row">
               <span>Obra</span>
-              <select class="input" name="contentId" ${state.syncRunning ? "disabled" : ""}>
+              <select class="input" name="contentId">
                 <option value="">Todas as obras</option>
                 ${contents.map((content) => `
                   <option value="${escapeHtml(content.id)}" ${content.id === state.syncContentId ? "selected" : ""}>${escapeHtml(content.title)}</option>
@@ -1396,6 +1750,33 @@ function renderVaultSettings(): string {
   `;
 }
 
+function renderDownloadSettings(): string {
+  const running = state.syncRunning || state.syncStatus?.state === "running";
+  return `
+    <form class="settings-panel download-settings-form" id="direct-download-form">
+      <p class="settings-lead">Cole o link de uma obra para iniciar um download individual pelo Pugotidownloader.</p>
+      <label class="form-row">
+        <span>Tipo de obra</span>
+        <select class="input" name="kind" required>
+          <option value="manga">Mangá</option>
+          <option value="manhwa">Manhwa</option>
+          ${state.vaultUnlocked ? `<option value="vault">Cofre</option>` : ""}
+        </select>
+      </label>
+      <label class="form-row">
+        <span>Link da obra</span>
+        <input class="input" name="url" type="url" placeholder="https://..." autocomplete="off" required />
+      </label>
+      <p class="modal-help">O link deve ser HTTP/HTTPS e compatível com um conector do Pugotidownloader. Se houver uma sincronização ativa, o download será adicionado à fila automaticamente.</p>
+      ${state.syncError ? `<p class="error">${escapeHtml(state.syncError)}</p>` : ""}
+      ${state.syncMessage ? `<p class="scan-message">${escapeHtml(state.syncMessage)}</p>` : ""}
+      <div class="settings-actions">
+        <button class="button" type="submit" ${directDownloadSubmitting ? "disabled" : ""}>${directDownloadSubmitting ? "Adicionando..." : running ? "Adicionar à fila" : "Iniciar download"}</button>
+      </div>
+    </form>
+  `;
+}
+
 function renderReadingModeSettings(): string {
   const kinds: LibraryKind[] = ["manga", "manhwa", "comic", "book", "lightNovel", "other"];
   return `
@@ -1415,8 +1796,9 @@ function renderReadingModeSettings(): string {
 
 function renderReadingDefaultsRow(kind: LibraryKind): string {
   const defaults = state.readingSettingsDraft[kind];
+  const textReader = kind === "book" || kind === "lightNovel";
   return `
-    <article class="library-settings-row reading-settings-row">
+    <article class="library-settings-row reading-settings-row${textReader ? " reading-settings-text" : ""}">
       <div class="library-settings-row-info">
         <strong>${escapeHtml(getLibraryKindLabel(kind))}</strong>
         <p>Controles usados ao abrir obras desta biblioteca.</p>
@@ -1424,19 +1806,18 @@ function renderReadingDefaultsRow(kind: LibraryKind): string {
       <label class="compact-field">
         <span>Modo</span>
         <select class="input" name="${kind}.mode">
-          <option value="horizontal" ${defaults.mode === "horizontal" ? "selected" : ""}>Horizontal</option>
-          <option value="paged-vertical" ${defaults.mode === "paged-vertical" ? "selected" : ""}>Vertical paginado</option>
-          <option value="vertical-scroll" ${defaults.mode === "vertical-scroll" ? "selected" : ""}>Scroll vertical</option>
+          <option value="horizontal" ${defaults.mode === "horizontal" ? "selected" : ""}>${textReader ? "Páginas" : "Horizontal"}</option>
+          <option value="vertical-scroll" ${defaults.mode !== "horizontal" ? "selected" : ""}>${textReader ? "Rolagem" : "Scroll"}</option>
         </select>
       </label>
-      <label class="compact-field">
+      ${textReader ? "" : `<label class="compact-field">
         <span>Ajuste</span>
         <select class="input" name="${kind}.fitting">
-          <option value="height" ${defaults.fitting === "height" ? "selected" : ""}>Altura</option>
-          <option value="width" ${defaults.fitting === "width" ? "selected" : ""}>Largura</option>
-          <option value="original" ${defaults.fitting === "original" ? "selected" : ""}>Original</option>
+          <option value="height" ${defaults.fitting === "height" ? "selected" : ""}>Página inteira</option>
+          <option value="width" ${defaults.fitting === "width" ? "selected" : ""}>Preencher largura</option>
+          <option value="original" ${defaults.fitting === "original" ? "selected" : ""}>Tamanho real</option>
         </select>
-      </label>
+      </label>`}
       <label class="toggle-field">
         <input type="checkbox" name="${kind}.controlsVisible" ${defaults.controlsVisible ? "checked" : ""} />
         <span>Controles visíveis</span>
@@ -1874,7 +2255,7 @@ function syncAdminUserDraftFromInputs(form: HTMLFormElement): void {
     displayName: String(formData.get("displayName") ?? ""),
     username: String(formData.get("username") ?? ""),
     password: String(formData.get("password") ?? ""),
-    role: String(formData.get("role") ?? "user") === "admin" ? "admin" : "user",
+    role: (() => { const r = String(formData.get("role") ?? "user"); return r === "admin" || r === "superuser" ? r : "user"; })() as "admin" | "superuser" | "user",
     allowedLibraryIds: formData.getAll("allowedLibraryIds").map((value) => String(value)),
     canLogin: formData.get("canLogin") === "on",
     canDownload: formData.get("canDownload") === "on",
@@ -2095,6 +2476,45 @@ function removeProfileFavorite(contentId: string): void {
   renderShell();
 }
 
+async function setProfileFavoriteFromMenu(contentId: string, enabled: boolean): Promise<void> {
+  if (!state.user || !contentId) return;
+  const currentIds = state.user.favoriteContentIds ?? [];
+  const favoriteContentIds = enabled
+    ? currentIds.includes(contentId)
+      ? currentIds
+      : [...currentIds, contentId].slice(0, 3)
+    : currentIds.filter((item) => item !== contentId);
+
+  if (enabled && !currentIds.includes(contentId) && currentIds.length >= 3) {
+    state.profileError = "Você pode fixar no máximo 3 obras favoritas.";
+    state.openSeriesMenuId = null;
+    renderShell();
+    return;
+  }
+
+  try {
+    state.profileError = "";
+    const payload = await api<{ user: PublicUser }>("/api/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify({
+        avatarUrl: state.user.avatarUrl ?? "",
+        nickname: state.user.nickname ?? "",
+        biography: state.user.biography ?? "",
+        location: state.user.location ?? "",
+        favoriteContentIds
+      })
+    });
+    state.user = payload.user;
+    state.openSeriesMenuId = null;
+    state.openSeriesAddMenuId = null;
+    state.openSeriesRemoveMenuId = null;
+    renderShell();
+  } catch (error) {
+    state.profileError = error instanceof Error ? error.message : "Não foi possível atualizar favoritas.";
+    renderShell();
+  }
+}
+
 async function saveCollectionSharing(form: HTMLFormElement): Promise<void> {
   const collectionId = state.sharingCollectionId;
   if (!collectionId) {
@@ -2270,7 +2690,42 @@ async function refreshLibraries(): Promise<void> {
   const { libraries } = await api<{ libraries: Library[] }>("/api/libraries");
   state.libraries = libraries;
   state.homeContents = await loadLibraryContents(getGloballyListedLibraries(libraries));
-  state.readingNowContents = await loadLibraryContents(libraries);
+  state.readingNowContents = await loadLibraryContents(getGloballyListedLibraries(libraries));
+}
+
+async function refreshLibraryAfterSync(libraryId: string | null): Promise<void> {
+  if (!libraryId) {
+    await refreshLibraries();
+    return;
+  }
+
+  const { libraries } = await api<{ libraries: Library[] }>("/api/libraries");
+  const library = libraries.find((item) => item.id === libraryId);
+  if (!library) {
+    state.libraries = libraries;
+    return;
+  }
+
+  const { contents } = await api<{ contents: ContentItem[] }>(
+    `/api/libraries/${encodeURIComponent(libraryId)}/contents`
+  );
+  const replaceLibraryContents = (current: ContentItem[], includeLibrary: boolean): ContentItem[] => [
+    ...current.filter((content) => content.libraryId !== libraryId),
+    ...(includeLibrary ? contents : [])
+  ];
+
+  state.libraries = libraries;
+  state.homeContents = replaceLibraryContents(
+    state.homeContents,
+    !library.isPersonal && globallyListedLibraryKinds.has(library.kind)
+  );
+  state.readingNowContents = replaceLibraryContents(
+    state.readingNowContents,
+    !library.isPersonal && globallyListedLibraryKinds.has(library.kind)
+  );
+  if (state.activeLibraryId === libraryId) {
+    state.contents = contents;
+  }
 }
 
 function updateStatsMenu(): void {
@@ -2290,27 +2745,28 @@ async function refreshSyncStatus(): Promise<void> {
 
   try {
     const { sync } = await api<{ sync: SyncStatus }>("/api/admin/sync/status");
+    const wasRunning = state.syncRunning;
+    const shouldApplyFinished = Boolean(
+      sync.finishedAt &&
+      sync.finishedAt !== lastAppliedSyncFinishedAt &&
+      (sync.state === "completed" || sync.state === "error")
+    );
     state.syncStatus = sync;
     state.syncRunning = sync.state === "running";
     updateStatsMenu();
 
-    if (
-      sync.finishedAt &&
-      sync.finishedAt !== lastAppliedSyncFinishedAt &&
-      (sync.state === "completed" || sync.state === "error")
-    ) {
+    if (shouldApplyFinished && sync.finishedAt) {
       lastAppliedSyncFinishedAt = sync.finishedAt;
       state.syncMessage = sync.state === "completed" ? sync.message : "";
       state.syncError = sync.state === "error" ? sync.message : "";
       if (sync.state === "completed") {
-        await refreshLibraries();
-        if (state.activeLibraryId === sync.libraryId) {
-          const { contents } = await api<{ contents: ContentItem[] }>(
-            `/api/libraries/${encodeURIComponent(sync.libraryId ?? "")}/contents`
-          );
-          state.contents = contents;
-        }
+        await refreshLibraryAfterSync(sync.libraryId);
       }
+      renderShell();
+    } else if (wasRunning !== state.syncRunning) {
+      // O estado pode mudar sem uma nova finalização (por exemplo, ao
+      // carregar a página durante uma execução). Nesse caso, a interface
+      // também precisa ser redesenhada para liberar/bloquear os controles.
       renderShell();
     }
   } catch {
@@ -2347,10 +2803,7 @@ async function deletePersonalLibrary(libraryId: string): Promise<void> {
     state.personalLibraries = state.personalLibraries.filter((item) => item.id !== libraryId);
     state.contents = state.contents.filter((content) => content.libraryId !== libraryId);
     if (state.activeLibraryId === libraryId) {
-      state.activeLibraryId = null;
-      state.activeSeriesId = null;
-      state.reader = null;
-      state.activeView = "vault";
+      await router.replaceRoute({ kind: "view", view: "vault" });
     }
     renderShell();
   } catch (error) {
@@ -2371,10 +2824,7 @@ async function deletePublicLibrary(libraryId: string): Promise<void> {
     state.homeContents = state.homeContents.filter((content) => content.libraryId !== libraryId);
     state.readingNowContents = state.readingNowContents.filter((content) => content.libraryId !== libraryId);
     if (state.activeLibraryId === libraryId) {
-      state.activeLibraryId = null;
-      state.activeSeriesId = null;
-      state.reader = null;
-      state.activeView = "home";
+      await router.replaceRoute({ kind: "view", view: "home" });
     }
     renderShell();
   } catch (error) {
@@ -2407,6 +2857,7 @@ async function unlockPersonalVault(form: HTMLFormElement): Promise<void> {
 }
 
 async function lockPersonalVault(): Promise<void> {
+  const wasPersonal = state.activeView === "vault" || state.personalLibraries.some((library) => library.id === state.activeLibraryId);
   await api<void>("/api/personal-vault/lock", { method: "POST" }).catch(() => undefined);
   clearVaultInactivityTimer();
   state.vaultUnlocked = false;
@@ -2415,11 +2866,41 @@ async function lockPersonalVault(): Promise<void> {
   state.vaultMenuOpen = false;
   lastVaultTouchAt = 0;
   state.personalLibraries = [];
-  state.contents = [];
-  state.activeLibraryId = null;
-  state.activeSeriesId = null;
-  state.reader = null;
+  if (wasPersonal) {
+    state.contents = [];
+    await router.replaceRoute({ kind: "view", view: "vault" });
+  }
   renderShell();
+}
+
+function openPersonalVaultFromShortcut(): void {
+  if (state.user?.role !== "admin") {
+    return;
+  }
+
+  state.vaultHiddenFromMenu = false;
+  closeNavigationPanels();
+  closeMobileNavigation();
+  openView("vault");
+
+  if (!state.vaultUnlocked) {
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>("#vault-password-input")?.focus());
+  }
+}
+
+async function lockAndHidePersonalVaultFromShortcut(): Promise<void> {
+  if (state.user?.role !== "admin") {
+    return;
+  }
+
+  state.vaultHiddenFromMenu = true;
+  closeNavigationPanels();
+  closeMobileNavigation();
+  if (state.activeView === "vault") {
+    openView("home");
+  }
+  renderShell();
+  await lockPersonalVault();
 }
 
 function toggleVaultMenuVisibility(): void {
@@ -2428,15 +2909,11 @@ function toggleVaultMenuVisibility(): void {
   }
 
   state.vaultHiddenFromMenu = !state.vaultHiddenFromMenu;
-  localStorage.setItem("pugotiread-vault-hidden", String(state.vaultHiddenFromMenu));
   state.vaultMenuOpen = false;
   if (state.vaultHiddenFromMenu && state.activeView === "vault") {
-    state.activeView = "home";
-    state.activeLibraryId = null;
-    state.activeSeriesId = null;
-    state.reader = null;
+    openView("home");
   }
-  renderShell();
+  renderNavigationMenus();
 }
 
 function clearVaultInactivityTimer(): void {
@@ -2530,9 +3007,11 @@ function readReadingDefaultsForm(form: HTMLFormElement): ServerSettings["reading
     const current = state.readingSettingsDraft[kind];
     const mode = String(formData.get(`${kind}.mode`) ?? current.mode) as ReaderMode;
     const fitting = String(formData.get(`${kind}.fitting`) ?? current.fitting) as FittingMode;
+    const direction = "ltr";
     return [kind, {
       mode,
       fitting,
+      direction,
       controlsVisible: formData.has(`${kind}.controlsVisible`)
     }];
   })) as ServerSettings["readingDefaults"];
@@ -2619,6 +3098,38 @@ async function synchronizeLibrary(form: HTMLFormElement): Promise<void> {
   renderShell();
 }
 
+async function startDirectDownload(form: HTMLFormElement): Promise<void> {
+  const formData = new FormData(form);
+  const kind = String(formData.get("kind") ?? "");
+  const url = String(formData.get("url") ?? "").trim();
+  directDownloadSubmitting = true;
+  state.syncError = "";
+  state.syncMessage = "Validando o link e preparando o download...";
+  renderShell();
+
+  try {
+    const { sync, queued, queuePosition } = await api<{ sync: SyncStatus; queued: boolean; queuePosition: number }>("/api/admin/download", {
+      method: "POST",
+      body: JSON.stringify({ kind, url })
+    });
+    state.syncStatus = sync;
+    state.syncMessage = kind === "vault"
+      ? queued
+        ? `Atualização do cofre adicionada à fila (posição ${queuePosition}).`
+        : "Atualizando o cofre."
+      : queued
+        ? `Download adicionado à fila (posição ${queuePosition}).`
+        : `${sync.target}: download iniciado em segundo plano.`;
+    form.reset();
+  } catch (error) {
+    state.syncMessage = "";
+    state.syncError = error instanceof Error ? error.message : "Não foi possível iniciar o download.";
+  } finally {
+    directDownloadSubmitting = false;
+  }
+  renderShell();
+}
+
 function closeLibraryModal(): void {
   state.libraryModalOpen = false;
   resetLibraryDraft();
@@ -2652,6 +3163,58 @@ function getLibraryAutocomplete(value: string): string | null {
   }
 
   return `>${library.name} `;
+}
+
+function getGlobalSearchResults(query: string): ContentItem[] {
+  const normalizedQuery = normalizeText(query.trim());
+  if (!normalizedQuery) return [];
+  const allowedIds = new Set([...state.libraries, ...(state.vaultUnlocked ? state.personalLibraries : [])].map((library) => library.id));
+  const contents = new Map([...getAvailableContents(), ...globalSearchExtraContents]
+    .filter((content) => allowedIds.has(content.libraryId)).map((content) => [content.id, content]));
+  return [...contents.values()].filter((content) => normalizeText([
+    content.title,
+    ...(content.authors ?? []),
+    ...(content.artists ?? [])
+  ].join(" ")).includes(normalizedQuery)).slice(0, 12);
+}
+
+function renderGlobalSearchResults(query = globalSearchQuery): string {
+  if (!query.trim()) {
+    return `<div class="global-search-empty" aria-hidden="true">${renderIcon("search")}</div>`;
+  }
+  const results = getGlobalSearchResults(query);
+  if (!results.length) {
+    return `<p class="global-search-no-results">Nenhuma obra encontrada.</p>`;
+  }
+  return `<div class="global-search-results">${results.map((content) => {
+    const library = [...state.libraries, ...state.personalLibraries].find((item) => item.id === content.libraryId);
+    const creators = [...(content.authors ?? []), ...(content.artists ?? [])]
+      .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index)
+      .join(", ");
+    return `
+      <button class="global-search-result" data-global-search-result="${escapeHtml(content.id)}" data-library-id="${escapeHtml(content.libraryId)}" type="button">
+        <span class="global-search-cover">${content.coverUrl ? `<img src="${escapeHtml(content.coverUrl)}" alt="" loading="lazy" />` : renderIcon("book")}</span>
+        <span class="global-search-copy">
+          <strong>${escapeHtml(content.title)}</strong>
+          <small>${escapeHtml([creators, library?.name ?? ""].filter(Boolean).join(" · "))}</small>
+        </span>
+        ${renderIcon("caretRight")}
+      </button>`;
+  }).join("")}</div>`;
+}
+
+function renderGlobalSearchModal(): string {
+  return `
+    <div class="global-search-backdrop" data-global-search-close="backdrop">
+      <section class="global-search-panel" role="dialog" aria-modal="true" aria-label="Buscar obras">
+        <div class="global-search-field">
+          ${renderIcon("search")}
+          <input id="global-search-input" type="search" value="${escapeHtml(globalSearchQuery)}" placeholder="Buscar obras…" autocomplete="off" aria-label="Buscar por título, autor ou artista" />
+          <button class="global-search-escape" data-global-search-close="button" type="button" aria-label="Fechar busca">ESC</button>
+        </div>
+        <div class="global-search-content" id="global-search-results" aria-live="polite">${renderGlobalSearchResults()}</div>
+      </section>
+    </div>`;
 }
 
 function updateSearchSuggestion(input: HTMLInputElement): void {
@@ -2868,7 +3431,7 @@ function renderCollectionSection(collection: UserCollection): string {
       }
       ${
         contents.length
-          ? `<div class="content-grid">${contents.map((content, index) => renderCollectionContentCard(collection, content, index)).join("")}</div>`
+          ? `<div class="content-grid">${contents.map((content, index) => renderCollectionContentCard(collection, content, index, editing)).join("")}</div>`
           : `<p class="empty compact">Coleção vazia.</p>`
       }
     </section>
@@ -2898,12 +3461,12 @@ function renderCollectionEditForm(collection: UserCollection, contentCount: numb
   `;
 }
 
-function renderCollectionContentCard(collection: UserCollection, content: ContentItem, index: number): string {
+function renderCollectionContentCard(collection: UserCollection, content: ContentItem, index: number, editing = false): string {
   const owner = collection.userId === state.user?.id;
   return `
     <div class="collection-card-shell">
       ${renderSeriesCard(content, `collection-${collection.id}-${content.id}-${index}`)}
-      ${owner ? `<button class="collection-remove-button" data-remove-collection-content="${escapeHtml(collection.id)}" data-content-id="${escapeHtml(content.id)}" type="button" aria-label="Remover ${escapeHtml(content.title)} da coleção">×</button>` : ""}
+      ${owner && editing ? `<button class="collection-remove-button" data-remove-collection-content="${escapeHtml(collection.id)}" data-content-id="${escapeHtml(content.id)}" type="button" aria-label="Remover ${escapeHtml(content.title)} da coleção">×</button>` : ""}
     </div>
   `;
 }
@@ -3039,6 +3602,7 @@ function renderAdminUserModal(): string {
                 <span>Permissão</span>
                 <select class="input" name="role">
                   <option value="user"${state.adminUserDraft.role === "user" ? " selected" : ""}>Usuário</option>
+                  <option value="superuser"${state.adminUserDraft.role === "superuser" ? " selected" : ""}>Superuser</option>
                   <option value="admin"${state.adminUserDraft.role === "admin" ? " selected" : ""}>Admin</option>
                 </select>
               </label>
@@ -3153,6 +3717,10 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
   const marked = state.seriesMarks.includes(content.id);
   const progress = getProgressForContent(content.id);
   const seriesLibrary = state.libraries.find((library) => library.id === content.libraryId) ?? activeLibrary;
+  if(content.pageTypes.length===1 && content.pageTypes[0]==='pdf') {
+    const bookmarks=getBookmarksForContent(content.id);
+    return renderPdfDetails(content,seriesLibrary,progress,marked,bookmarks.length?renderMarkedPageRows(bookmarks,[content]):'',bookmarks.length);
+  }
   const chapterLabel = content.chapterCount === 1 ? "capítulo" : "capítulos";
   const mainChapters = content.chapters.filter((chapter) => !chapter.isSpecial);
   const specialChapters = content.chapters.filter((chapter) => chapter.isSpecial);
@@ -3162,8 +3730,12 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
   const visibleChapters = state.seriesTab === "specials" ? specialChapters : mainChapters;
   const chapters = getOrderedChapters(visibleChapters, progress);
   const releaseYear = getReleaseYear(content.releaseDate);
-  const authors = content.authors.length ? content.authors.join(", ") : "N/A";
+  const authors = content.authors?.filter(name => name.trim()).join(", ") || "N/A";
+  const artists = content.artists?.filter(name => name.trim()).join(", ") || "N/A";
   const genres = content.genres.slice(0, 6);
+  const isBook = seriesLibrary?.kind === "book";
+  const googleRating = isBook ? (content.externalRating ?? null) : null;
+  const personalRating = activeReviews.find((review) => review.userId === state.user?.id)?.rating ?? null;
 
   return `
     <section class="series-detail">
@@ -3180,23 +3752,25 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
           <div class="series-kicker-row">
             <span class="series-library-chip">${escapeHtml(getSeriesKindLabel(seriesLibrary?.kind))}</span>
             <span class="series-status-chip">${progress ? "Em leitura" : "Disponível"}</span>
+            ${(seriesLibrary?.kind === "manga" || seriesLibrary?.kind === "manhwa") && isPublicationCompleted(content.publicationStatus) ? '<span class="series-status-chip publication-completed">Finalizada</span>' : ""}
           </div>
           <h1>${escapeHtml(content.title)}</h1>
           <div class="series-original-title">${escapeHtml(seriesLibrary?.name ?? "Biblioteca")}</div>
-          ${
-            genres.length
-              ? `<div class="series-genre-row">${genres.map((genre) => `<span>${escapeHtml(genre)}</span>`).join("")}</div>`
-              : ""
-          }
+          <div class="series-genre-row"${genres.length ? "" : ' aria-hidden="true"'}>${genres.map((genre) => `<span>${escapeHtml(genre)}</span>`).join("")}</div>
           <div class="series-detail-stats" aria-label="Resumo da obra">
             <div class="series-stat-card">
-              ${renderSeriesRatingDisplay(content.rating)}
-              <span class="series-stat-note">${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span>
-            </div>
-            <div class="series-stat-card">
-              <span class="series-stat-icon">${renderIcon("bookmarks")}</span>
-              <strong>${content.chapterCount}</strong>
-              <span>${chapterLabel}</span>
+              ${isBook
+                ? `<div class="series-rating-sources">
+                    <div class="series-rating-source">
+                      <span class="series-rating-label">Google Books<small>Nota da comunidade</small></span>
+                      ${renderSeriesRatingDisplay(googleRating, "/5")}
+                    </div>
+                    <div class="series-rating-source">
+                      <span class="series-rating-label">Minha avaliação<small>Sua nota para a obra</small></span>
+                      ${renderPersonalRatingDisplay(personalRating)}
+                    </div>
+                  </div>`
+                : `<div class="series-rating-sources"><div class="series-rating-source"><span class="series-rating-label">Nota da fonte</span>${renderSeriesRatingDisplay(content.rating)}</div><div class="series-rating-source"><span class="series-rating-label">Minha avaliação</span><span class="series-personal-rating-group">${renderPersonalRatingDisplay(personalRating)}<small class="series-stat-note">${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</small></span></div></div>`}
             </div>
             <div class="series-stat-card">
               <span class="series-stat-icon">${renderIcon("release")}</span>
@@ -3212,27 +3786,35 @@ function renderSeriesView(content: ContentItem, activeLibrary: Library | undefin
               ${renderIcon(marked ? "ratingFilled" : "rating")} ${marked ? "Favoritado" : "Favoritar"}
             </button>
             <span class="series-secondary-action inert">${renderIcon("progress")} ${escapeHtml(progressLabel)}</span>
+            <span class="series-secondary-action inert series-count-action">
+              ${renderIcon("bookmarks")} <strong>${content.chapterCount}</strong> ${chapterLabel}
+            </span>
+            <span class="series-secondary-action inert series-count-action">
+              ${renderIcon("all")} <strong>${content.pageCount}</strong> páginas
+            </span>
           </div>
           <div class="series-creator-grid">
             <div><span>Autor(es):</span> <strong>${escapeHtml(authors)}</strong></div>
-            <div><span>Páginas:</span> <strong>${content.pageCount}</strong></div>
+            <div><span>Artista(s):</span> <strong>${escapeHtml(artists)}</strong></div>
           </div>
-          <section class="series-description-card" aria-label="Sinopse">
-            <h2>Sinopse</h2>
-            <p class="series-description${content.description ? "" : " muted"}">${escapeHtml(content.description ?? "Sem sinopse disponível para esta obra.")}</p>
-          </section>
         </div>
+        <section class="series-description-card" aria-label="Sinopse">
+          <h2>Sinopse</h2>
+          <p class="series-description${content.description ? "" : " muted"}">${escapeHtml(content.description?.trim() || "Sem sinopse disponível para esta obra.")}</p>
+        </section>
       </div>
+      ${seriesLibrary?.kind === 'other' && content.pageTypes.includes('pdf') ? '<section class="rpg-panel" data-rpg-panel><p class="muted">Carregando módulos e fichas…</p></section>' : ''}
       <div class="series-tabs" role="tablist" aria-label="Seções da série">
         ${renderSeriesTabButton("chapters", "Capítulos", mainChapters.length)}
         ${renderSeriesTabButton("specials", "Especiais", specialChapters.length)}
         ${renderSeriesTabButton("reviews", "Reviews", reviewCount)}
+        ${renderSeriesTabButton("bookmarks", "Páginas marcadas", getBookmarksForContent(content.id).length)}
       </div>
       <div class="series-detail-body">
         ${
           state.seriesTab === "reviews"
             ? renderSeriesReviewsTab(content, activeReviews)
-            : `
+            : state.seriesTab === "bookmarks" ? renderMarkedPageRows(getBookmarksForContent(content.id), [content]) : `
               <div class="series-controls">
                 <label class="series-control-group">
                   <span class="series-control-label">Ordenação</span>
@@ -3285,17 +3867,25 @@ function getReleaseYear(releaseDate: string | null): string {
   return yearMatch?.[0] ?? releaseDate;
 }
 
-function renderSeriesRatingDisplay(rating: string | null): string {
-  const value = rating ? Number.parseFloat(rating) : Number.NaN;
+function renderSeriesRatingDisplay(rating: string | null, scale = ""): string {
+  const checked = validRating(rating);
+  const value = checked !== null ? Number.parseFloat(checked) : Number.NaN;
+  if (!scale && checked?.includes("/")) scale = "/" + checked.split("/")[1].trim();
   const displayValue = Number.isFinite(value) ? value.toFixed(1) : "N/A";
   const ratingClass = getRatingClass(rating);
 
   return `
     <span class="series-rating-display ${ratingClass}">
       <strong>${escapeHtml(displayValue)}</strong>
+      ${scale ? `<small>${escapeHtml(scale)}</small>` : ""}
       ${renderIcon("ratingFilled")}
     </span>
   `;
+}
+
+function renderPersonalRatingDisplay(rating: number | null): string {
+  const value = typeof rating === "number" && Number.isFinite(rating) ? rating.toFixed(1) : "N/A";
+  return `<span class="personal-rating-display"><strong>${escapeHtml(value)}</strong><small>/10</small></span>`;
 }
 
 function renderSeriesTabButton(tab: AppState["seriesTab"], label: string, count: number): string {
@@ -3350,7 +3940,7 @@ function renderReviewCard(review: PublicContentReview): string {
       <div class="review-card-header">
         <div>
           <strong>${escapeHtml(review.displayName)}</strong>
-          <p>${escapeHtml(review.role === "admin" ? "Administrador" : "Usuário")}</p>
+          <p>${escapeHtml(review.role === "admin" ? "Administrador" : review.role === "superuser" ? "Superuser" : "Usuário")}</p>
         </div>
         <span class="review-score">${escapeHtml(review.rating.toFixed(1))}</span>
       </div>
@@ -3433,7 +4023,8 @@ function getOrderedChapters(
 }
 
 function getRatingClass(rating: string | null): string {
-  const value = rating ? Number.parseFloat(rating) : Number.NaN;
+  const checked = validRating(rating);
+  const value = checked !== null ? Number.parseFloat(checked) : Number.NaN;
   if (Number.isNaN(value)) {
     return "rating-empty";
   }
@@ -3450,7 +4041,7 @@ function getReaderModeLabel(mode: ReaderMode): string {
   const labels: Record<ReaderMode, string> = {
     horizontal: "Horizontal",
     "paged-vertical": "Vertical paginado",
-    "vertical-scroll": "Scroll vertical"
+    "vertical-scroll": "Scroll"
   };
   return labels[mode];
 }
@@ -3458,23 +4049,31 @@ function getReaderModeLabel(mode: ReaderMode): string {
 function getReaderModeIconLabel(mode: ReaderMode): string {
   const icons: Record<ReaderMode, string> = {
     horizontal: renderIcon("readerHorizontal"),
-    "paged-vertical": renderIcon("readerVertical"),
-    "vertical-scroll": renderIcon("readerVertical")
+    "paged-vertical": renderIcon("readerPagedVertical"),
+    "vertical-scroll": renderIcon("readerScroll")
   };
   return icons[mode];
 }
 
 function getNextReaderMode(mode: ReaderMode): ReaderMode {
   if (mode === "vertical-scroll") return "horizontal";
-  if (mode === "horizontal") return "paged-vertical";
   return "vertical-scroll";
 }
 
 function getFittingLabel(fitting: FittingMode): string {
   const labels: Record<FittingMode, string> = {
-    height: "Altura",
+    height: "Página inteira",
+    width: "Preencher largura",
+    original: "Tamanho real"
+  };
+  return labels[fitting];
+}
+
+function getFittingShortLabel(fitting: FittingMode): string {
+  const labels: Record<FittingMode, string> = {
+    height: "Inteira",
     width: "Largura",
-    original: "Original"
+    original: "Real"
   };
   return labels[fitting];
 }
@@ -3493,10 +4092,44 @@ function setReaderZoom(zoom: number): void {
   if (!state.reader) return;
   state.reader.zoom = clampReaderZoom(zoom);
   state.reader.controlsVisible = true;
+
+  if (state.reader.content.pageTypes.includes("pdf")) {
+    // Zoom PDF: vincula o valor à escala real dos canvases re-renderizando apenas
+    // as páginas visíveis/próximas da viewport, sem reinicializar o documento
+    // (evita renderShell / iniciarLeitorPdf) e preservando a posição.
+    atualizarRotuloZoomPdf();
+    aplicarZoomPdf(state.reader.zoom / 100, obterPaginaAtualPdf());
+    return;
+  }
+
+  if (state.reader.content.pageTypes.includes("epub")) {
+    const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+    if (frame) {
+      state.reader.epubOffset = getEpubCurrentOffset(frame);
+      applyEpubAppearance(frame, true);
+    }
+    renderEpubOverlay();
+    return;
+  }
+
   renderShell();
-  if (state.reader.mode === "vertical-scroll") {
+  if (state.reader.mode === "vertical-scroll" && !state.reader.content.pageTypes.includes("epub")) {
     requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
   }
+}
+
+function atualizarRotuloZoomPdf(): void {
+  const rotulo = document.querySelector<HTMLButtonElement>(".reader-pdf-zoom-value");
+  const zoom = state.reader?.zoom ?? 100;
+  if (rotulo) {
+    rotulo.textContent = `${zoom}%`;
+    rotulo.setAttribute("aria-label", `Zoom ${zoom}%. Voltar a 100%`);
+    rotulo.title = `Zoom ${zoom}% · Voltar a 100%`;
+  }
+  const diminuir = document.querySelector<HTMLButtonElement>(".reader-pdf-zoom-control [data-reader-action=zoom-out]");
+  const aumentar = document.querySelector<HTMLButtonElement>(".reader-pdf-zoom-control [data-reader-action=zoom-in]");
+  if (diminuir) diminuir.disabled = zoom <= 50;
+  if (aumentar) aumentar.disabled = zoom >= 250;
 }
 
 function getContentProgressPercent(content: ContentItem, page: number): number {
@@ -3562,33 +4195,111 @@ function getAdjacentChapterStartPage(content: ContentItem, page: number, directi
   return next?.startPage ?? page;
 }
 
+function closeReader(): void {
+  void exitReaderFullscreen().catch(() => undefined);
+  const reader = state.reader;
+  if (!reader) return;
+  epubPanel = "none";
+
+  if (reader.content.pageTypes.includes("epub")) {
+    const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+    if (frame) {
+      reader.epubOffset = getEpubCurrentOffset(frame);
+      scheduleReaderProgressSave(reader.content, reader.page, reader.epubOffset);
+    }
+  }
+
+  if (reader.mode === "vertical-scroll" && !reader.content.pageTypes.includes("pdf")) {
+    const visiblePage = getVisibleReaderPage();
+    if (visiblePage !== null && visiblePage !== reader.page) {
+      reader.page = visiblePage;
+      scheduleReaderProgressSave(reader.content, visiblePage);
+    }
+  }
+
+  clearReaderLoadingTimer();
+  readerPrefetchGeneration += 1;
+  epubPrefetch?.abort();
+  epubPrefetch = null;
+  readerImageCache.clear();
+  releaseReaderImageWindow?.();
+  releaseReaderImageWindow = null;
+  encerrarLeitorPdf();
+  pendingReaderPage = null;
+  readerNavigationId += 1;
+  router.backTo({ kind: "title", libraryId: reader.content.libraryId, contentId: reader.content.id });
+}
+
+function bindReaderPdfHomeButton(): void {
+  document.querySelector<HTMLButtonElement>(".reader-pdf-back")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeReader();
+  });
+}
+
+function renderContadorAbsoluto(content: ContentItem, safePage: number): string {
+  if (content.pageTypes.includes("epub")) {
+    const total = content.chapters.length > 0 ? content.chapters.length : Math.max(content.pageCount, 1);
+    const indiceCapitulo = content.chapters.findIndex((capitulo) => {
+      const fim = capitulo.startPage + capitulo.pageCount - 1;
+      return safePage >= capitulo.startPage && safePage <= fim;
+    });
+    const atual = Math.max(
+      (indiceCapitulo >= 0 ? indiceCapitulo + 1 : safePage + 1),
+      1
+    );
+    return ` · Capítulo ${atual}/${total}`;
+  }
+  if (content.pageTypes.includes("pdf")) {
+    return ` · Página ${obterPaginaAtualPdf()}/${obterTotalPaginasPdf()}`;
+  }
+  return ` · Página ${Math.min(safePage + 1, Math.max(content.pageCount, 1))}/${Math.max(content.pageCount, 1)}`;
+}
+
+function atualizarContadorAbsoluto(): void {
+  if (!state.reader) return;
+  const elemento = document.querySelector<HTMLElement>("[data-reader-absolute-progress]");
+  if (!elemento) return;
+  elemento.textContent = renderContadorAbsoluto(state.reader.content, state.reader.page);
+}
+
 function renderReaderOverlay(): void {
   if (!state.reader) return;
-  const { content, page, mode, fitting, zoom, brightness, bookTheme, controlsVisible } = state.reader;
-  const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
+  const { content, page, mode, fitting, direction, zoom, brightness, controlsVisible } = state.reader;
+  if (content.pageTypes.includes("pdf")) {
+    atualizarRotuloZoomPdf();
+    atualizarBotaoMarcadorPdf(page);
+    updateReaderFullscreenButton();
+    return;
+  }
+  if (content.pageTypes.includes("epub")) {
+    renderEpubOverlay();
+    return;
+  }
+  const safePage = safeReaderPage(content, page);
   const pageBookmarked = isPageBookmarked(content.id, safePage);
   const chapterProgress = getReaderChapterProgress(content, safePage);
   const modeIcon = getReaderModeIconLabel(mode);
   const modeLabel = getReaderModeLabel(mode);
   const fittingLabel = getFittingLabel(fitting);
-  const isBookReader = content.pageTypes.includes("epub");
 
   const topHtml = `
     <div class="reader-overlay-inner">
-      <button class="reader-btn-icon reader-back-btn" data-reader-action="close" type="button" aria-label="Voltar">${renderIcon("back")}</button>
+      <button class="reader-btn-icon reader-back-btn" data-reader-action="close" type="button" aria-label="Voltar" title="Voltar (Esc)" aria-keyshortcuts="Escape">${renderIcon("back")}</button>
       <div class="reader-title-group">
         <div class="reader-title-text">${escapeHtml(content.title)}</div>
-        <div class="reader-subtitle">${escapeHtml(getChapterForPage(content, safePage)?.name ?? `Página ${safePage + 1}`)} · ${getContentProgressPercent(content, safePage)}%</div>
+        <div class="reader-subtitle">${escapeHtml(getChapterForPage(content, safePage)?.name ?? `Página ${safePage + 1}`)} · ${getContentProgressPercent(content, safePage)}%<span class="reader-absolute-progress" data-reader-absolute-progress>${renderContadorAbsoluto(content, safePage)}</span></div>
       </div>
       <div class="reader-overlay-right">
-        <button class="reader-btn-icon" data-reader-action="bookmark" type="button" title="${pageBookmarked ? "Remover marcador" : "Marcar página"}">${renderIcon(pageBookmarked ? "bookmarksFilled" : "bookmarks")}</button>
+        <button class="reader-btn-icon reader-image-bookmark${pageBookmarked ? " is-active" : ""}" data-reader-action="bookmark" type="button" aria-label="${pageBookmarked ? "Remover marcador" : "Marcar página"}" aria-pressed="${pageBookmarked}" title="${pageBookmarked ? "Remover marcador" : "Marcar página"} (B)" aria-keyshortcuts="B">${renderIcon("bookmarks")}</button>
       </div>
     </div>
   `;
 
   const bottomHtml = `
     <div class="reader-slider-row">
-      <div class="reader-slider-inner">
+      <div class="reader-slider-inner" ${direction === "rtl" && mode !== "vertical-scroll" ? 'dir="rtl"' : ""}>
         <button class="reader-btn-icon" data-reader-action="chapter-prev" type="button" title="Capítulo anterior" aria-label="Capítulo anterior">${renderIcon("rewind")}</button>
         <button class="reader-btn-icon" data-reader-action="page-prev" type="button" title="Página anterior" aria-label="Página anterior">${renderIcon("back")}</button>
         <div class="reader-slider-track">
@@ -3601,28 +4312,18 @@ function renderReaderOverlay(): void {
       </div>
     </div>
     <div class="reader-action-row">
-      <button class="reader-action-btn" data-reader-action="toggle-fitting" type="button" title="Ajuste: ${fittingLabel}">
+      <button class="reader-action-btn" data-reader-action="toggle-fitting" type="button" title="${fittingLabel}. Mudar para ${getFittingLabel(getNextFittingMode(fitting))}" aria-label="Ajuste da imagem: ${fittingLabel}. Mudar para ${getFittingLabel(getNextFittingMode(fitting))}">
         <span class="icon">${renderFittingIcon(fitting)}</span>
-        <span class="label">Ajuste</span>
+        <span class="label">${getFittingShortLabel(fitting)}</span>
       </button>
-      <button class="reader-action-btn" data-reader-action="toggle-mode" type="button" title="${modeLabel}">
+      <button class="reader-action-btn" data-reader-action="toggle-mode" type="button" title="${modeLabel} (M)" aria-keyshortcuts="M">
         <span class="icon">${modeIcon}</span>
-        <span class="label">Modo</span>
+        <span class="label">${modeLabel}</span>
       </button>
-      <button class="reader-action-btn" data-reader-action="fullscreen" type="button" title="${escapeHtml(getReaderFullscreenLabel())}">
-        <span class="icon">${renderIcon(isReaderFullscreen() ? "fullscreenExit" : "fullscreen")}</span>
+      <button class="reader-action-btn reader-fullscreen" data-reader-action="fullscreen" type="button" aria-label="${escapeHtml(getReaderFullscreenLabel())}" title="${escapeHtml(getReaderFullscreenLabel())} (F)" aria-keyshortcuts="F" ${isReaderFullscreenAvailable() ? "" : "disabled"}>
+        <span class="icon">${renderReaderFullscreenIcon()}</span>
         <span class="label">Tela cheia</span>
       </button>
-      <button class="reader-action-btn" data-reader-action="toggle-direction" type="button" title="Direção de leitura">
-        <span class="icon">${renderIcon("direction")}</span>
-        <span class="label">Direção</span>
-      </button>
-      ${isBookReader ? `
-        <button class="reader-action-btn" data-reader-action="toggle-book-theme" type="button" title="Tema do livro: ${bookTheme === "dark" ? "Escuro" : "Claro"}">
-          <span class="icon">${renderIcon(bookTheme === "dark" ? "moon" : "sun")}</span>
-          <span class="label">Tema</span>
-        </button>
-      ` : ""}
       <div class="reader-zoom-control" aria-label="Zoom">
         <button class="reader-btn-icon compact" data-reader-action="zoom-out" type="button" title="Diminuir zoom" aria-label="Diminuir zoom">${renderIcon("minus")}</button>
         <button class="reader-zoom-value" data-reader-action="zoom-reset" type="button" title="Resetar zoom" aria-label="Resetar zoom">${zoom}%</button>
@@ -3655,25 +4356,113 @@ function renderReaderOverlay(): void {
   }
 }
 
+function renderEpubOverlay(): void {
+  const reader = state.reader;
+  if (!reader) return;
+  const { content, page, controlsVisible, epubOffset, epubLengths } = reader;
+  const percent = epubBookPercent(epubLengths.length === content.pageCount ? epubLengths : Array(content.pageCount).fill(1), page, epubOffset);
+  const chapter = getChapterForPage(content, page);
+  const top = document.querySelector<HTMLElement>(".reader-overlay.top");
+  const bottom = document.querySelector<HTMLElement>(".reader-overlay.bottom");
+  const section = document.querySelector<HTMLElement>(".reader");
+  if (top) {
+    top.innerHTML = `<div class="reader-overlay-inner epub-toolbar">
+      <button class="reader-btn-icon reader-back-btn" data-reader-action="close" aria-label="Voltar" title="Voltar">${renderIcon("back")}</button>
+      <div class="reader-title-group"><div class="reader-title-text">${escapeHtml(content.title)}</div><div class="reader-subtitle">${escapeHtml(chapter?.name ?? `Trecho ${page + 1}`)} · <span data-epub-progress>${percent}</span>%<span class="reader-absolute-progress" data-reader-absolute-progress>${renderContadorAbsoluto(content, page)}</span></div></div>
+      <button class="reader-btn-icon" data-reader-action="epub-toc" aria-label="Sumário" title="Sumário">☰</button>
+      <button class="reader-btn-icon" data-reader-action="bookmark" aria-label="${isPageBookmarked(content.id, page) ? "Remover marcador" : "Marcar trecho"}" title="Marcador (B)">${renderIcon(isPageBookmarked(content.id, page) ? "bookmarksFilled" : "bookmarks")}</button>
+    </div>`;
+    top.setAttribute("aria-hidden", String(!controlsVisible));
+  }
+  if (bottom) {
+    bottom.innerHTML = `<div class="epub-bottom-inner">
+      <div class="epub-progress-track" role="progressbar" aria-label="Progresso no livro" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div>
+      <div class="reader-action-row epub-actions">
+        <button class="reader-action-btn" data-reader-action="epub-appearance" aria-expanded="${epubPanel === "appearance"}"><span class="icon">Aa</span><span class="label">Aparência</span></button>
+        <button class="reader-action-btn" data-reader-action="epub-view" title="${reader.mode === "vertical-scroll" ? "Mudar para páginas" : "Mudar para rolagem"}" aria-label="Modo de leitura: ${reader.mode === "vertical-scroll" ? "Rolagem" : "Páginas"}. ${reader.mode === "vertical-scroll" ? "Mudar para páginas" : "Mudar para rolagem"}"><span class="icon">${renderEpubViewIcon(reader.mode)}</span><span class="label">${reader.mode === "vertical-scroll" ? "Rolagem" : "Páginas"}</span></button>
+        <button class="reader-action-btn" data-reader-action="epub-search" aria-expanded="false"><span class="icon">${renderIcon("search")}</span><span class="label">Buscar</span></button>
+        <button class="reader-action-btn" data-reader-action="toggle-book-theme"><span class="icon">${renderIcon(reader.bookTheme === "dark" ? "moon" : "sun")}</span><span class="label">${reader.bookTheme === "light" ? "Claro" : reader.bookTheme === "sepia" ? "Sépia" : "Escuro"}</span></button>
+        <button class="reader-action-btn reader-fullscreen" data-reader-action="fullscreen" aria-label="${escapeHtml(getReaderFullscreenLabel())}" ${isReaderFullscreenAvailable() ? "" : "disabled"}><span class="icon">${renderReaderFullscreenIcon()}</span><span class="label">Tela cheia</span></button>
+        <div class="reader-zoom-control" role="group" aria-label="Zoom"><button class="reader-btn-icon compact" data-reader-action="zoom-out" aria-label="Diminuir zoom">${renderIcon("minus")}</button><button class="reader-zoom-value" data-reader-action="zoom-reset" aria-label="Zoom ${reader.zoom}%. Voltar a 100%">${reader.zoom}%</button><button class="reader-btn-icon compact" data-reader-action="zoom-in" aria-label="Aumentar zoom">${renderIcon("plus")}</button></div>
+        <label class="reader-brightness-control">${renderIcon("sun")}<input data-reader-brightness type="range" min="10" max="100" value="${reader.brightness}" aria-label="Brilho" /></label>
+      </div>
+      ${epubPanel === "appearance" ? `<div class="epub-panel" role="group" aria-label="Aparência do livro">
+        <label>Fonte<select data-epub-setting="font"><option value="serif" ${reader.epubFont === "serif" ? "selected" : ""}>Com serifa</option><option value="sans" ${reader.epubFont === "sans" ? "selected" : ""}>Sem serifa</option></select></label>
+        <label>Tamanho <input data-epub-setting="size" type="range" min="14" max="32" value="${reader.epubFontSize}" /></label>
+        <label>Entrelinhas <input data-epub-setting="line" type="range" min="1.3" max="2.2" step="0.1" value="${reader.epubLineHeight}" /></label>
+        <label>Margens <input data-epub-setting="margin" type="range" min="12" max="64" value="${reader.epubMargin}" /></label>
+        <div class="epub-appearance-actions">
+        <button class="reader-btn-icon epub-appearance-reset" data-reader-action="epub-appearance-reset" type="button" aria-label="Restaurar aparência padrão" title="Restaurar fonte, tamanho, entrelinhas e margens">${renderIconeToolbarPdf("M4 7h16M10 11v6m4-6v6M5 7l1 13h12l1-13M9 7V4h6v3")}</button>
+        <button class="reader-btn-icon" data-reader-action="epub-appearance-close" type="button" aria-label="Fechar aparência" title="Fechar aparência">${renderIconeToolbarPdf("M6 6l12 12M18 6 6 18")}</button>
+        </div>
+      </div>` : ""}
+      ${epubPanel === "toc" ? `<div class="epub-panel epub-toc" role="navigation" aria-label="Sumário do livro">${content.chapters.map(ch => `<button data-reader-action="epub-goto" data-epub-page="${ch.startPage}" type="button">${escapeHtml(ch.name)}</button>`).join("")}</div>` : ""}
+    </div>`;
+    bottom.setAttribute("aria-hidden", String(!controlsVisible));
+  }
+  section?.classList.toggle("controls-visible", controlsVisible);
+  section?.style.setProperty("--reader-brightness", `${reader.brightness}%`);
+}
+
+function renderEpubViewIcon(mode: ReaderMode): string {
+  if (mode === "vertical-scroll") {
+    return '<svg class="reader-pdf-toolbar-icon" data-epub-view-icon="scroll" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12v20H6zM9 6h6M9 9h6M9 12h6M12 15v4m-2-2 2 2 2-2"/></svg>';
+  }
+  return '<svg class="reader-pdf-toolbar-icon" data-epub-view-icon="pages" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5C9.5 3.5 6.5 3 3 4v15c3.5-1 6.5-.5 9 1 2.5-1.5 5.5-2 9-1V4c-3.5-1-6.5-.5-9 1zm0 0v15M5.5 8h4M5.5 11h4m5-3h4m-4 3h4"/></svg>';
+}
+
+function persistEpubAppearance(): void {
+  const reader = state.reader;
+  if (!reader?.content.pageTypes.includes("epub")) return;
+  localStorage.setItem(`pugotiread-epub-appearance:${state.user?.id}`, JSON.stringify({
+    theme: reader.bookTheme, font: reader.epubFont,
+    size: reader.epubFontSize, line: reader.epubLineHeight, margin: reader.epubMargin
+  }));
+}
+
 function renderFittingIcon(fitting: FittingMode): string {
-  const icons: Record<FittingMode, string> = {
-    height: renderIcon("fitHeight"),
-    width: renderIcon("fitWidth"),
-    original: renderIcon("fitOriginal")
+  const paths: Record<FittingMode, string> = {
+    height: "M3 3h18v18H3zM9 5h6v14H9z",
+    width: "M3 3h18v18H3zM5 12h14m-11-3-3 3 3 3m8-6 3 3-3 3",
+    original: "M3 3h18v18H3zM7 7h3v3H7zM14 14h3v3h-3z"
   };
-  return icons[fitting];
+  return `<svg class="reader-pdf-toolbar-icon" data-fitting-icon="${fitting}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[fitting]}"/></svg>`;
 }
 
 function renderReader(content: ContentItem, page: number, mode: ReaderMode): string {
-  const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
+  const safePage = safeReaderPage(content, page);
   const controlsVisible = state.reader?.controlsVisible ?? false;
   const fitting = state.reader?.fitting ?? "height";
   const zoom = state.reader?.zoom ?? 100;
   const brightness = state.reader?.brightness ?? 100;
   const bookTheme = state.reader?.bookTheme ?? "light";
   const paginationClass = mode === "paged-vertical" ? "vertical" : "horizontal";
+  const isPdfReader = content.pageTypes.includes("pdf");
+  const isBookReader = content.pageTypes.includes("epub");
+  const direction = state.reader?.direction ?? "ltr";
+  const isRtl = direction === "rtl";
   return `
-    <section class="reader book-theme-${bookTheme} ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%; --reader-zoom-percent: ${zoom}%; --reader-zoom-scale: ${zoom / 100}; --reader-max-width: ${Math.round(980 * (zoom / 100))}px">
+    <section class="reader ${isPdfReader ? "reader-pdf-reader" : ""} ${isBookReader ? "reader-book-reader" : ""} book-theme-${bookTheme} ${isRtl ? "reader-rtl" : ""} ${controlsVisible ? "controls-visible" : ""}" style="--reader-brightness: ${brightness}%; --reader-zoom-percent: ${zoom}%; --reader-zoom-scale: ${zoom / 100}; --reader-max-width: ${Math.round(980 * (zoom / 100))}px">
+      ${isPdfReader ? `<nav class="reader-pdf-toolbar" aria-label="Controles do PDF">
+        <button class="reader-pdf-back" data-reader-action="close" type="button" aria-label="Voltar para a página inicial" title="Voltar para a página inicial (Esc)" aria-keyshortcuts="Escape">${renderIconeToolbarPdf("M15 6l-6 6l6 6")}<span>Início</span></button>
+        <form class="reader-pdf-page-form" data-pdf-page-form><label for="pdf-page-input">Página atual</label><input id="pdf-page-input" data-pdf-page-input type="number" inputmode="numeric" min="1" value="1" disabled aria-label="Ir para a página" /><span data-pdf-page-total aria-live="polite">/ …</span></form>
+        <div class="reader-pdf-zoom-control" role="group" aria-label="Zoom do PDF">
+          <button class="reader-pdf-zoom-button" data-reader-action="zoom-out" type="button" aria-label="Diminuir zoom" title="Diminuir zoom">${renderIconeToolbarPdf("M5 12h14")}</button>
+          <button class="reader-pdf-zoom-value" data-reader-action="zoom-reset" type="button" aria-label="Zoom ${zoom}%. Voltar a 100%" title="Voltar a 100%">${zoom}%</button>
+          <button class="reader-pdf-zoom-button" data-reader-action="zoom-in" type="button" aria-label="Aumentar zoom" title="Aumentar zoom">${renderIconeToolbarPdf("M12 5v14M5 12h14")}</button>
+        </div>
+        <button class="reader-pdf-fullscreen" data-reader-action="fullscreen" type="button" aria-label="${escapeHtml(getReaderFullscreenLabel())}" title="${escapeHtml(getReaderFullscreenLabel())} (F)" aria-keyshortcuts="F" ${isReaderFullscreenAvailable() ? "" : "disabled"}><span class="icon">${renderIconeToolbarPdf("M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3")}</span></button>
+      </nav>
+      <nav class="reader-pdf-side-toolbar" aria-label="Ferramentas do PDF">
+        <button class="reader-pdf-outline-button" data-reader-action="pdf-outline" type="button" aria-label="Abrir sumário" title="Sumário">${renderIconeToolbarPdf("M4 5h16M4 12h16M4 19h16")}</button>
+        <button class="reader-pdf-search-button" data-reader-action="pdf-search" type="button" aria-label="Pesquisar no PDF" title="Pesquisar no PDF (/ ou Ctrl+F)" aria-keyshortcuts="/ Control+F Meta+F">${renderIconeToolbarPdf("M21 21l-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0a8 8 0 0 1 16 0")}</button>
+        <button class="reader-pdf-bookmark" data-reader-action="bookmark" type="button" aria-label="Marcar página" title="Marcar página (B)" aria-keyshortcuts="B"><span class="icon">${renderIconeMarcadorPdf(isPageBookmarked(content.id, safePage))}</span></button>
+        <button class="reader-pdf-print-button" data-reader-action="pdf-print" type="button" aria-label="Imprimir PDF" title="Imprimir PDF">${renderIconeImprimirPdf()}</button>
+        <details class="reader-pdf-options">
+          <summary aria-label="Ajustar brilho" title="Ajustar brilho">${renderIconeToolbarPdf("M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6L7 7m10 10l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4M16 12a4 4 0 1 1-8 0a4 4 0 0 1 8 0")}</summary>
+          <label class="reader-pdf-brightness-panel">Brilho<input data-reader-brightness type="range" min="10" max="100" value="${brightness}" aria-label="Brilho" /></label>
+        </details>
+      </nav><div class="reader-pdf-feedback" role="status" aria-live="polite" hidden></div>` : ""}
       <div class="reader-pagination ${paginationClass}">
         <button class="zone prev" data-reader-action="page-prev" aria-label="Página anterior"></button>
         <button class="zone next" data-reader-action="page-next" aria-label="Próxima página"></button>
@@ -3681,8 +4470,15 @@ function renderReader(content: ContentItem, page: number, mode: ReaderMode): str
       <div class="reader-stage ${mode === "vertical-scroll" ? "vertical-scroll" : ""} ${fitting === "width" ? "fit-width" : fitting === "original" ? "fit-original" : "fit-height"}" id="reader-stage">
         ${renderReaderPages(content, safePage, mode)}
       </div>
-      <div class="reader-overlay top" aria-hidden="${controlsVisible ? "false" : "true"}"></div>
-      <div class="reader-overlay bottom" aria-hidden="${controlsVisible ? "false" : "true"}"></div>
+      ${isPdfReader ? `<form class="reader-pdf-search" data-pdf-search hidden role="search"><label for="pdf-search-input">Pesquisar no PDF</label><input id="pdf-search-input" data-pdf-search-input type="search" autocomplete="off" placeholder="Pesquisar" /><button data-pdf-search-previous type="button" aria-label="Resultado anterior" title="Resultado anterior">${renderIconeToolbarPdf("M6 15l6-6l6 6")}</button><button data-pdf-search-next type="button" aria-label="Próximo resultado" title="Próximo resultado">${renderIconeToolbarPdf("M6 9l6 6l6-6")}</button><button data-pdf-search-close type="button" aria-label="Fechar pesquisa" title="Fechar pesquisa">${renderIconeToolbarPdf("M18 6L6 18M6 6l12 12")}</button><output data-pdf-search-status aria-live="polite"></output></form>` : ""}
+      ${isBookReader ? `<form class="reader-epub-search" data-epub-search hidden role="search"><label for="epub-search-input">Pesquisar no livro</label><input id="epub-search-input" data-epub-search-input type="search" autocomplete="off" placeholder="Pesquisar" /><button data-epub-search-previous type="button" aria-label="Resultado anterior" title="Resultado anterior">${renderIconeToolbarPdf("M6 15l6-6l6 6")}</button><button data-epub-search-next type="button" aria-label="Próximo resultado" title="Próximo resultado">${renderIconeToolbarPdf("M6 9l6 6l6-6")}</button><button data-epub-search-close type="button" aria-label="Fechar pesquisa" title="Fechar pesquisa">${renderIconeToolbarPdf("M18 6L6 18M6 6l12 12")}</button><output data-epub-search-status aria-live="polite"></output></form>` : ""}
+      <div class="reader-load-status" data-reader-load-status hidden aria-live="polite" aria-atomic="true">
+        <span class="reader-load-spinner" aria-hidden="true"></span>
+        <span data-reader-load-message>Carregando página…</span>
+        <button class="reader-load-retry" data-reader-action="retry-page" type="button" hidden>Tentar novamente</button>
+      </div>
+      ${isPdfReader ? "" : `<div class="reader-overlay top" aria-hidden="${controlsVisible ? "false" : "true"}"></div>
+      <div class="reader-overlay bottom" aria-hidden="${controlsVisible ? "false" : "true"}"></div>`}
     </section>
   `;
 }
@@ -3692,16 +4488,25 @@ function renderReaderPages(content: ContentItem, page: number, mode: ReaderMode)
     return `<div class="reader-page-message">Nenhuma página encontrada.</div>`;
   }
 
+  if (content.pageTypes.includes("pdf")) {
+    return `<div class="reader-media-shell">${renderPageMedia(content, page, false)}</div>`;
+  }
+
+  if (content.pageTypes.includes("epub")) {
+    return renderPageMedia(content, page, mode === "vertical-scroll", true);
+  }
+
   if (mode === "vertical-scroll") {
     const chapter = getChapterForPage(content, page);
     if (chapter) {
       const start = chapter.startPage;
       const end = start + chapter.pageCount;
       return Array.from({ length: end - start }, (_, index) => {
-        return renderPageMedia(content, start + index, true);
+        const absolutePage = start + index;
+        return renderPageMedia(content, absolutePage, true, index === 0 || absolutePage === page);
       }).join("");
     }
-    return renderPageMedia(content, page, true);
+    return renderPageMedia(content, page, true, true);
   }
 
   return `
@@ -3711,20 +4516,14 @@ function renderReaderPages(content: ContentItem, page: number, mode: ReaderMode)
   `;
 }
 
-function renderPageMedia(content: ContentItem, page: number, vertical: boolean): string {
-  const src = getPageUrl(content, page);
-  const pageType = content.pageTypes[page] ?? "image";
+function renderPageMedia(content: ContentItem, page: number, vertical: boolean, eager = true): string {
+  const isPdf = content.pageTypes.includes("pdf");
+  const src = getPageUrl(content, isPdf ? 0 : page);
+  const pageType = isPdf ? "pdf" : content.pageTypes[page] ?? "image";
   const className = vertical ? "reader-image vertical-page" : "reader-image";
 
   if (pageType === "pdf") {
-    return `
-      <iframe
-        class="reader-pdf ${vertical ? "vertical-page" : ""}"
-        data-reader-page-index="${page}"
-        src="${escapeHtml(src)}#toolbar=0"
-        title="${escapeHtml(content.title)} PDF ${page + 1}"
-      ></iframe>
-    `;
+    return `<div class="reader-pdf" data-reader-page-index="${page}" data-pdf-url="${escapeHtml(src)}" role="document" aria-label="${escapeHtml(content.title)}"><div class="pdf-status" data-pdf-status role="status" aria-live="polite">PDF carregando…</div><div class="pdf-pages" data-pdf-pages></div></div>`;
   }
 
   if (pageType === "epub") {
@@ -3732,13 +4531,295 @@ function renderPageMedia(content: ContentItem, page: number, vertical: boolean):
       <iframe
         class="reader-epub ${vertical ? "vertical-page" : ""}"
         data-reader-page-index="${page}"
+        data-epub-mode="${state.reader?.mode ?? "horizontal"}"
         src="${escapeHtml(src)}"
         title="${escapeHtml(content.title)} capítulo ${page + 1}"
       ></iframe>
     `;
   }
 
-  return `<img class="${className}" data-reader-page-index="${page}" src="${escapeHtml(src)}" alt="${escapeHtml(content.title)} página ${page + 1}" loading="${vertical && page >= 2 ? "lazy" : "eager"}" />`;
+  return `<img class="${className}" data-reader-page-index="${page}" src="${escapeHtml(src)}" alt="${escapeHtml(content.title)} página ${page + 1}" loading="${vertical && !eager ? "lazy" : "eager"}" fetchpriority="${!vertical || eager ? "high" : "low"}" decoding="async" />`;
+}
+
+function bindReaderPdfViewer(): void {
+  const viewer = document.querySelector<HTMLElement>(".reader-pdf[data-pdf-url]");
+  if (!viewer) return;
+  void iniciarLeitorPdf(viewer.dataset.pdfUrl ?? "", (state.reader?.page ?? 0) + 1, (state.reader?.zoom ?? 100) / 100);
+  document.querySelector<HTMLFormElement>("[data-pdf-search]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void pesquisarPdf();
+  });
+  document.querySelector("[data-pdf-search-next]")?.addEventListener("click", () => proximoResultadoPdf(1));
+  document.querySelector("[data-pdf-search-previous]")?.addEventListener("click", () => proximoResultadoPdf(-1));
+  document.querySelector("[data-pdf-search-close]")?.addEventListener("click", fecharPesquisaPdf);
+  document.querySelector<HTMLInputElement>("[data-pdf-search-input]")?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      fecharPesquisaPdf();
+    }
+  });
+  document.querySelector<HTMLInputElement>("[data-pdf-page-input]")?.addEventListener("change", (event) => {
+    const campo = event.currentTarget as HTMLInputElement;
+    campo.value = String(navegarParaPaginaPdf(Number(campo.value)));
+  });
+  document.querySelector<HTMLFormElement>("[data-pdf-page-form]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const campo = (event.currentTarget as HTMLFormElement).querySelector<HTMLInputElement>("[data-pdf-page-input]");
+    if (!campo) return;
+    campo.value = String(navegarParaPaginaPdf(Number(campo.value)));
+    campo.blur();
+  });
+}
+
+let epubResultados: Array<{ chapterIndex: number; chapterName: string; count: number }> = [];
+let epubIndiceResultado = -1;
+
+function pesquisaEpubAberta(): boolean {
+  const pesquisa = document.querySelector<HTMLElement>("[data-epub-search]");
+  return Boolean(pesquisa && !pesquisa.hidden);
+}
+
+function abrirPesquisaEpub(): void {
+  const pesquisa = document.querySelector<HTMLElement>("[data-epub-search]");
+  const campo = document.querySelector<HTMLInputElement>("[data-epub-search-input]");
+  if (!pesquisa || !campo) return;
+  pesquisa.hidden = false;
+  const botao = document.querySelector<HTMLElement>('[data-reader-action="epub-search"]');
+  if (botao) botao.setAttribute("aria-expanded", "true");
+  campo.focus();
+  campo.select();
+}
+
+function fecharPesquisaEpub(): void {
+  const pesquisa = document.querySelector<HTMLElement>("[data-epub-search]");
+  if (pesquisa) pesquisa.hidden = true;
+  const botao = document.querySelector<HTMLElement>('[data-reader-action="epub-search"]');
+  if (botao) botao.setAttribute("aria-expanded", "false");
+}
+
+function atualizarBotoesPesquisaEpub(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-epub-search-next], [data-epub-search-previous]").forEach((botao) => {
+    botao.disabled = epubResultados.length === 0;
+  });
+}
+
+async function pesquisarEpub(): Promise<void> {
+  if (!state.reader) return;
+  const content = state.reader.content;
+  const campo = document.querySelector<HTMLInputElement>("[data-epub-search-input]");
+  const status = document.querySelector<HTMLElement>("[data-epub-search-status]");
+  const termo = (campo?.value ?? "").trim();
+  epubResultados = [];
+  epubIndiceResultado = -1;
+  atualizarBotoesPesquisaEpub();
+  if (!termo || !content.pageTypes.includes("epub")) {
+    if (status) status.textContent = "Digite um termo.";
+    return;
+  }
+  if (status) status.textContent = "Buscando no livro…";
+  try {
+    const url = `/api/contents/${encodeURIComponent(content.id)}/epub-search?q=${encodeURIComponent(termo)}`;
+    const data = await api<{ total: number; results: Array<{ chapterIndex: number; chapterName: string; count: number }> }>(url);
+    epubResultados = data.results.sort((a, b) => a.chapterIndex - b.chapterIndex);
+    atualizarBotoesPesquisaEpub();
+    if (epubResultados.length === 0) {
+      if (status) status.textContent = "Nenhum resultado.";
+      return;
+    }
+    const total = epubResultados.reduce((soma, r) => soma + r.count, 0);
+    if (status) status.textContent = `${total} ocorrência${total === 1 ? "" : "s"} · ${epubResultados.length} ${epubResultados.length === 1 ? "capítulo" : "capítulos"}`;
+    await irParaResultadoEpub(0);
+  } catch (erro) {
+    if (status) status.textContent = "Não foi possível buscar no livro.";
+    console.error(erro);
+  }
+}
+
+async function irParaResultadoEpub(indice: number): Promise<void> {
+  if (epubResultados.length === 0) return;
+  epubIndiceResultado = (indice + epubResultados.length) % epubResultados.length;
+  const resultado = epubResultados[epubIndiceResultado];
+  const status = document.querySelector<HTMLElement>("[data-epub-search-status]");
+  const termo = (document.querySelector<HTMLInputElement>("[data-epub-search-input]")?.value ?? "").trim();
+  await setReaderPage(resultado.chapterIndex, true);
+  const frame = document.querySelector<HTMLIFrameElement>(`.reader-epub[data-reader-page-index="${resultado.chapterIndex}"]`);
+  if (frame) realcarTermoEpub(frame, termo);
+  if (status) status.textContent = `${epubIndiceResultado + 1}/${epubResultados.length} · Capítulo ${resultado.chapterIndex + 1} · ${resultado.count} ${resultado.count === 1 ? "ocorrência" : "ocorrências"}`;
+}
+
+function proximoResultadoEpub(direcao: -1 | 1): void {
+  void irParaResultadoEpub(epubIndiceResultado + direcao);
+}
+
+function realcarTermoEpub(frame: HTMLIFrameElement, termoBruto: string): void {
+  const termo = termoBruto.trim();
+  if (!termo) return;
+  const doc = frame.contentDocument;
+  if (doc?.body && doc.readyState === "complete") {
+    realcarTermoEpubNoDocumento(doc, termo);
+    return;
+  }
+  frame.addEventListener("load", () => realcarTermoEpubNoDocumento(frame.contentDocument, termo), { once: true });
+}
+
+function realcarTermoEpubNoDocumento(doc: Document | null, termo: string): void {
+  if (!doc?.body) return;
+  doc.querySelectorAll("mark[data-epub-highlight]").forEach((marcador) => {
+    const pai = marcador.parentNode;
+    if (pai) pai.replaceChild(doc.createTextNode(marcador.textContent ?? ""), marcador as Node);
+    pai?.normalize();
+  });
+  const termoNormal = normalizarTermoEpub(termo);
+  if (!termoNormal) return;
+  const caminhador = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const nos: Text[] = [];
+  let atual = caminhador.nextNode();
+  while (atual) {
+    const node = atual as Text;
+    if (node.nodeValue && node.nodeValue.trim()) nos.push(node);
+    atual = caminhador.nextNode();
+  }
+  for (const node of nos) {
+    const valor = node.nodeValue;
+    if (!valor) continue;
+    const normal = normalizarTermoEpub(valor);
+    if (!normal.includes(termoNormal)) continue;
+    // Reconstrói o nó envolvendo as ocorrências do termo em <mark>.
+    const fragment = doc.createDocumentFragment();
+    let cursor = 0;
+    let indice = normal.indexOf(termoNormal);
+    const lengthNormal = termoNormal.length;
+    while (indice >= 0) {
+      if (indice > cursor) {
+        fragment.append(doc.createTextNode(valor.slice(cursor, indice)));
+      }
+      const mark = doc.createElement("mark");
+      mark.dataset.epubHighlight = "true";
+      mark.textContent = valor.slice(indice, indice + lengthNormal);
+      fragment.append(mark);
+      cursor = indice + lengthNormal;
+      indice = normal.indexOf(termoNormal, cursor);
+    }
+    if (cursor < valor.length) {
+      fragment.append(doc.createTextNode(valor.slice(cursor)));
+    }
+    if (fragment.childNodes.length > 0) {
+      node.parentNode?.replaceChild(fragment, node);
+    }
+  }
+  const primeiro = doc.querySelector<HTMLElement>("mark[data-epub-highlight]");
+  primeiro?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function normalizarTermoEpub(valor: string): string {
+  return valor.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+}
+
+function getEpubCurrentOffset(frame: HTMLIFrameElement): number {
+  if (!state.reader || !frame.contentDocument) return state.reader?.epubOffset ?? 0;
+  if (frame.dataset.epubMode === "vertical-scroll") {
+    const stage = document.getElementById("reader-stage");
+    return stage ? epubViewportOffset(stage.scrollTop, stage.scrollHeight, stage.clientHeight) : 0;
+  }
+  const doc = frame.contentDocument;
+  const scrolling = doc.scrollingElement ?? doc.documentElement;
+  return epubViewportOffset(Math.abs(scrolling.scrollLeft), scrolling.scrollWidth, scrolling.clientWidth);
+}
+
+function updateEpubPosition(frame: HTMLIFrameElement): void {
+  const reader = state.reader;
+  if (!reader || !reader.content.pageTypes.includes("epub") || Number(frame.dataset.readerPageIndex) !== reader.page) return;
+  reader.epubOffset = getEpubCurrentOffset(frame);
+  const percent = epubBookPercent(reader.epubLengths.length === reader.content.pageCount ? reader.epubLengths : Array(reader.content.pageCount).fill(1), reader.page, reader.epubOffset);
+  const label = document.querySelector<HTMLElement>("[data-epub-progress]");
+  const bar = document.querySelector<HTMLElement>(".epub-progress-track");
+  if (label) label.textContent = String(percent);
+  if (bar) {
+    bar.setAttribute("aria-valuenow", String(percent));
+    const fill = bar.querySelector<HTMLElement>("span");
+    if (fill) fill.style.width = `${percent}%`;
+  }
+  scheduleReaderProgressSave(reader.content, reader.page, reader.epubOffset);
+}
+
+function scheduleEpubPosition(frame: HTMLIFrameElement): void {
+  if (epubProgressRaf !== null) return;
+  epubProgressRaf = requestAnimationFrame(() => {
+    epubProgressRaf = null;
+    updateEpubPosition(frame);
+  });
+}
+
+function applyEpubAppearance(frame: HTMLIFrameElement, restore = false): void {
+  const reader = state.reader;
+  const doc = frame.contentDocument;
+  const stage = document.getElementById("reader-stage");
+  if (!reader || !doc?.body || !stage) return;
+  doc.documentElement.style.touchAction = "pan-x pan-y";
+  const main = doc.querySelector<HTMLElement>(".pugotiread-epub-document");
+  if (!main) return;
+  const margin = reader.epubMargin;
+  doc.body.style.setProperty("font-family", reader.epubFont === "sans" ? "Arial, Helvetica, sans-serif" : "Georgia, 'Times New Roman', serif", "important");
+  doc.body.style.setProperty("font-size", `${reader.epubFontSize * reader.zoom / 100}px`, "important");
+  doc.body.style.setProperty("line-height", String(reader.epubLineHeight), "important");
+  doc.querySelectorAll<HTMLElement>("p, li").forEach(element => element.style.setProperty("line-height", String(reader.epubLineHeight), "important"));
+  doc.body.style.setProperty("padding", `${margin}px`, "important");
+  doc.body.style.setProperty("overflow", "visible", "important");
+  if (reader.mode === "vertical-scroll") {
+    doc.documentElement.style.overflow = "visible";
+    doc.body.style.width = "auto";
+    doc.body.style.height = "auto";
+    main.style.height = "auto";
+    main.style.width = "min(760px, 100%)";
+    main.style.margin = "0 auto";
+    main.style.columnWidth = "auto";
+    main.style.columnGap = "normal";
+    frame.style.height = `${Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight, stage.clientHeight)}px`;
+    if (restore) stage.scrollTop = Math.round((stage.scrollHeight - stage.clientHeight) * reader.epubOffset);
+  } else {
+    const width = Math.max(frame.clientWidth, stage.clientWidth);
+    const height = Math.max(stage.clientHeight, 200);
+    const columnWidth = Math.min(Math.max(width - 2 * margin, 160), 760);
+    const leftMargin = Math.max(0, (width - columnWidth) / 2 - margin);
+    frame.style.height = `${height}px`;
+    doc.documentElement.style.overflowX = "auto";
+    doc.documentElement.style.overflowY = "hidden";
+    doc.body.style.width = `${width}px`;
+    doc.body.style.height = `${height}px`;
+    main.style.width = `${columnWidth}px`;
+    main.style.height = `${Math.max(height - 2 * margin, 100)}px`;
+    main.style.maxWidth = "none";
+    main.style.columnWidth = `${columnWidth}px`;
+    main.style.columnGap = `${width - columnWidth}px`;
+    main.style.columnFill = "auto";
+    main.style.margin = `0 0 0 ${leftMargin}px`;
+    if (restore) {
+      requestAnimationFrame(() => {
+        const scrolling = doc.scrollingElement ?? doc.documentElement;
+        scrolling.scrollLeft = Math.round((scrolling.scrollWidth - scrolling.clientWidth) * reader.epubOffset) * (reader.direction === "rtl" ? -1 : 1);
+      });
+    }
+  }
+}
+
+function advanceEpubPage(step: -1 | 1): void {
+  const reader = state.reader;
+  const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+  const stage = document.getElementById("reader-stage");
+  if (!reader || !frame || !stage) return;
+  if (reader.mode === "vertical-scroll") {
+    const next = Math.max(0, Math.min(stage.scrollTop + step * (stage.clientHeight - 40), stage.scrollHeight - stage.clientHeight));
+    if (Math.abs(next - stage.scrollTop) > 2) stage.scrollTo({ top: next, behavior: "smooth" });
+    else void setReaderPage(reader.page + step, false, step < 0 ? 1 : 0);
+  } else {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    const scrolling = doc.scrollingElement ?? doc.documentElement;
+    const sign = reader.direction === "rtl" ? -1 : 1;
+    const next = Math.max(0, Math.min(Math.abs(scrolling.scrollLeft) + step * frame.clientWidth, scrolling.scrollWidth - scrolling.clientWidth));
+    if (Math.abs(next - Math.abs(scrolling.scrollLeft)) > 2) scrolling.scrollTo({ left: sign * next, behavior: "smooth" });
+    else void setReaderPage(reader.page + step, false, step < 0 ? 1 : 0);
+  }
 }
 
 function bindReaderEpubFrames(): void {
@@ -3748,37 +4829,280 @@ function bindReaderEpubFrames(): void {
       if (!doc?.documentElement || !doc.body) {
         return;
       }
-
-      const height = Math.max(
-        doc.documentElement.scrollHeight,
-        doc.documentElement.offsetHeight,
-        doc.body.scrollHeight,
-        doc.body.offsetHeight,
-        window.innerHeight
-      );
-      frame.style.height = `${height}px`;
+      if (state.reader?.mode === "vertical-scroll") {
+        const height = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight, window.innerHeight);
+        if (Math.abs(frame.offsetHeight - height) > 2) frame.style.height = `${height}px`;
+      }
     };
 
     frame.addEventListener("load", () => {
+      applyEpubAppearance(frame, true);
       resize();
       const doc = frame.contentDocument;
       if (!doc?.body || typeof ResizeObserver === "undefined") {
         return;
       }
 
-      doc.addEventListener("pointerdown", () => {
+      // Toggle de controles protegido contra seleção de texto e arrasto: não
+      // alterna quando a ação era início de seleção/arrasto (getSelection) —
+      // evita o flicker ao selecionar texto. Mantém tap-outside razoável.
+      let inicioSelecaoX = 0;
+      let inicioSelecaoY = 0;
+      let arrastou = false;
+      doc.addEventListener("pointerdown", (event: PointerEvent) => {
+        inicioSelecaoX = event.clientX;
+        inicioSelecaoY = event.clientY;
+        arrastou = false;
+      });
+      doc.addEventListener("pointermove", (event: PointerEvent) => {
+        if (Math.hypot(event.clientX - inicioSelecaoX, event.clientY - inicioSelecaoY) > 6) {
+          arrastou = true;
+        }
+      });
+      doc.addEventListener("pointerup", (event: PointerEvent) => {
+        if (Math.hypot(event.clientX - inicioSelecaoX, event.clientY - inicioSelecaoY) > 6) {
+          arrastou = true;
+        }
+      });
+      doc.addEventListener("click", (event) => {
         if (!state.reader) {
           return;
         }
-
-        state.reader.controlsVisible = !state.reader.controlsVisible;
-        renderReaderOverlay();
+        const selecao = doc.getSelection();
+        const haTextoSelecionado = selecao ? selecao.toString().trim().length > 0 : false;
+        if (arrastou || haTextoSelecionado) {
+          return;
+        }
+        if ((event.target as Element)?.closest("a, button, input, textarea, select")) return;
+        const x = (event as MouseEvent).clientX / Math.max(frame.clientWidth, 1);
+        if (state.reader.mode !== "vertical-scroll" && x < 0.22) advanceEpubPage(state.reader.direction === "rtl" ? 1 : -1);
+        else if (state.reader.mode !== "vertical-scroll" && x > 0.78) advanceEpubPage(state.reader.direction === "rtl" ? -1 : 1);
+        else { state.reader.controlsVisible = !state.reader.controlsVisible; renderReaderOverlay(); }
       });
+
+      let touchX = 0;
+      let touchY = 0;
+      let pinchStartDistance = 0;
+      let pinchLastDistance = 0;
+      let pinchStartZoom = 100;
+      doc.addEventListener("touchstart", event => {
+        if (event.touches.length === 2) {
+          pinchStartDistance = Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY);
+          pinchLastDistance = pinchStartDistance;
+          pinchStartZoom = state.reader?.zoom ?? 100;
+          arrastou = true;
+          return;
+        }
+        if (event.touches.length === 1) { touchX = event.touches[0].clientX; touchY = event.touches[0].clientY; }
+      }, { passive: true });
+      doc.addEventListener("touchmove", event => {
+        if (event.touches.length !== 2 || pinchStartDistance <= 0) return;
+        pinchLastDistance = Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY);
+        arrastou = true;
+        event.preventDefault();
+      }, { passive: false });
+      doc.addEventListener("touchend", event => {
+        if (pinchStartDistance > 0) {
+          if (event.touches.length < 2) {
+            setReaderZoom(pinchStartZoom * pinchLastDistance / pinchStartDistance);
+            pinchStartDistance = 0;
+          }
+          return;
+        }
+        if (state.reader?.mode === "vertical-scroll" || event.changedTouches.length !== 1) return;
+        const dx = event.changedTouches[0].clientX - touchX;
+        const dy = event.changedTouches[0].clientY - touchY;
+        if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+          arrastou = true;
+          advanceEpubPage(dx < 0 ? 1 : -1);
+        }
+      }, { passive: true });
+      doc.addEventListener("scroll", () => scheduleEpubPosition(frame), { passive: true });
+
+      // Encaminha atalhos disparados dentro do iframe do EPUB para o leitor.
+      // O iframe captura os eventos de teclado e impede que cheguem ao listener
+      // global da janela pai; por isso todas as setas precisam ser resolvidas
+      // aqui. As setas verticais levam a página atual ao topo/final e não
+      // podem cair na rolagem nativa do iframe nem na navegação entre páginas.
+      doc.addEventListener("keydown", (event: KeyboardEvent) => {
+        const alvoProtegido = alvoEditavelPdf(event.target);
+        const chave = event.key.toLowerCase();
+        const controle = event.ctrlKey || event.metaKey;
+        if (controle && !event.altKey && chave === "f") {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent("pugotiread:epub-search-open"));
+          return;
+        }
+        if (!controle && !event.altKey && !event.shiftKey && event.key === "/") {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent("pugotiread:epub-search-open"));
+          return;
+        }
+        const ehEpub = state.reader?.content.pageTypes.includes("epub") === true;
+        const acao = resolverTeclaEpubIframe(
+          { key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, alvoProtegido },
+          ehEpub ? (state.reader?.direction ?? "ltr") : "ltr"
+        );
+        if (acao) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          executarAtalhoLeitor(acao);
+        }
+      }, { capture: true });
 
       const observer = new ResizeObserver(resize);
       observer.observe(doc.body);
-      observer.observe(doc.documentElement);
+      const stage = document.getElementById("reader-stage");
+      if (!stage) return;
+      let stageWidth = stage.clientWidth;
+      let stageHeight = stage.clientHeight;
+      const stageObserver = new ResizeObserver(() => {
+        if (!frame.isConnected) { stageObserver.disconnect(); return; }
+        if (stage.clientWidth === stageWidth && stage.clientHeight === stageHeight) return;
+        stageWidth = stage.clientWidth;
+        stageHeight = stage.clientHeight;
+        if (state.reader) state.reader.epubOffset = getEpubCurrentOffset(frame);
+        applyEpubAppearance(frame, true);
+        resize();
+      });
+      stageObserver.observe(stage);
+      doc.fonts.ready.then(() => { applyEpubAppearance(frame, true); resize(); }).catch(() => undefined);
     }, { once: true });
+  });
+}
+
+function bindReaderEpubSearch(): void {
+  document.querySelector<HTMLFormElement>("[data-epub-search]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void pesquisarEpub();
+  });
+  document.querySelector("[data-epub-search-next]")?.addEventListener("click", () => proximoResultadoEpub(1));
+  document.querySelector("[data-epub-search-previous]")?.addEventListener("click", () => proximoResultadoEpub(-1));
+  document.querySelector("[data-epub-search-close]")?.addEventListener("click", fecharPesquisaEpub);
+  document.querySelector<HTMLInputElement>("[data-epub-search-input]")?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      fecharPesquisaEpub();
+    }
+  });
+}
+
+let markedPageContents: ContentItem[] = [];
+let markedPageBookmarks: Bookmark[] = [];
+let markedPagesLoading = false;
+let markedPagesError = "";
+let markedPagesRequest = 0;
+
+async function loadMarkedPages(): Promise<void> {
+  const request = ++markedPagesRequest;
+  markedPagesLoading = true;
+  markedPagesError = "";
+  markedPageBookmarks = [];
+  // Wait for the authorized list; bootstrap IDs can be stale after filesystem moves.
+  const idsInBookmarks = new Set(state.bookmarks.map((bookmark) => bookmark.contentId));
+  markedPageContents = getAvailableContents().filter((content) => idsInBookmarks.has(content.id));
+  renderShell();
+  try {
+    const payload = await Promise.race([
+      api<{ bookmarks: Bookmark[]; contents: ContentItem[] }>("/api/bookmarks?includeContents=1"),
+      new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("A atualização demorou mais que o esperado.")), 12000))
+    ]);
+    if (request !== markedPagesRequest || state.activeView !== "bookmarks" || state.reader) return;
+    // Preserve other (e.g. locked vault) marks in state; the view uses only accessible works.
+    for (const bookmark of payload.bookmarks) {
+      state.bookmarks = state.bookmarks.filter((item) => item.contentId !== bookmark.contentId || item.page !== bookmark.page);
+      state.bookmarks.push(bookmark);
+    }
+    markedPageContents = payload.contents;
+    markedPageBookmarks = payload.bookmarks;
+  } catch (error) {
+    if (request === markedPagesRequest) markedPagesError = error instanceof Error ? error.message : "Não foi possível carregar as páginas marcadas.";
+  } finally {
+    if (request === markedPagesRequest) {
+      markedPagesLoading = false;
+      if (state.activeView === "bookmarks" && !state.reader) renderShell();
+    }
+  }
+}
+
+function renderMarkedPagesView(): string {
+  const visible = new Set(markedPageBookmarks.map(item => `${item.contentId}:${item.page}`));
+  const bookmarks = state.bookmarks.filter(item => visible.has(`${item.contentId}:${item.page}`));
+  return `<section class="marked-pages-view"><div class="section-heading"><h1>Páginas marcadas</h1><span>${bookmarks.length} marcações</span></div>
+    <p class="muted">Acesse uma página salva ou dê um nome para encontrá-la mais facilmente.</p>
+    ${markedPagesLoading ? '<p role="status">Carregando páginas marcadas…</p>' : markedPagesError ? `<p role="alert">${escapeHtml(markedPagesError)}</p><button class="button secondary" data-retry-marked-pages type="button">Tentar novamente</button>` : renderMarkedPageRows(bookmarks, markedPageContents)}
+  </section>`;
+}
+
+function renderMarkedPageRows(bookmarks: Bookmark[], contents: ContentItem[]): string {
+  if (!bookmarks.length) return '<p class="empty compact">Nenhuma página marcada. Use o marcador durante a leitura para salvar uma página.</p>';
+  const sorted = [...bookmarks].sort((a, b) => a.contentId.localeCompare(b.contentId) || a.page - b.page);
+  return `<div class="marked-page-list">${sorted.map((bookmark) => {
+    const content = contents.find((item) => item.id === bookmark.contentId);
+    const title = bookmark.name || `Página ${bookmark.page + 1}`;
+    return `<article class="marked-page-row" data-marked-content="${escapeHtml(bookmark.contentId)}" data-marked-page="${bookmark.page}">
+      <div class="marked-page-copy"><strong class="marked-page-name">${escapeHtml(title)}</strong><span>${escapeHtml(content?.title ?? "Obra indisponível")} · Página ${bookmark.page + 1}</span></div>
+      <div class="marked-page-actions"><button class="button primary" data-open-marked-page type="button" ${content ? "" : "disabled"} aria-label="Ir para página ${bookmark.page + 1}: ${escapeHtml(title)}" title="Ir para página">${renderIcon("keyframes")}</button>
+      <details class="marked-page-edit"><summary aria-label="Renomear página" title="Renomear página">${renderIcon("writingSign")}</summary><form data-rename-marked-page>
+        <label>Nome da página<input name="name" type="text" maxlength="120" value="${escapeHtml(bookmark.name ?? "")}" placeholder="Página ${bookmark.page + 1}" autocomplete="off" /></label>
+        <small>Deixe vazio para usar o número da página.</small>
+        <div class="marked-page-edit-actions"><button class="button primary" type="submit">Salvar</button><button class="button secondary" data-cancel-marked-name type="button">Cancelar</button></div>
+        <output role="status" aria-live="polite"></output>
+      </form></details><button class="button secondary" data-remove-marked-page type="button" aria-label="Desmarcar página ${bookmark.page + 1}: ${escapeHtml(title)}" title="Desmarcar página">${renderIcon("bookmarkOff")}</button></div>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function bindMarkedPageActions(): void {
+  document.querySelector("[data-retry-marked-pages]")?.addEventListener("click", () => void loadMarkedPages());
+  document.querySelectorAll<HTMLButtonElement>("[data-open-marked-page]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>("[data-marked-content]")!;
+      const content = markedPageContents.find((item) => item.id === row.dataset.markedContent) ?? findContentById(row.dataset.markedContent ?? "");
+      if (!content) return;
+      closeNavigationPanels();
+      closeMobileNavigation();
+      openReaderAtPageAndRender(content, Number(row.dataset.markedPage));
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-marked-page]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const row = button.closest<HTMLElement>("[data-marked-content]");
+      if (!row) return;
+      await api("/api/bookmarks", { method: "POST", body: JSON.stringify({ contentId: row.dataset.markedContent, page: Number(row.dataset.markedPage) }) });
+      state.bookmarks = state.bookmarks.filter((item) => !(item.contentId === row.dataset.markedContent && item.page === Number(row.dataset.markedPage)));
+      renderShell();
+    });
+  });
+  document.querySelectorAll<HTMLFormElement>("[data-rename-marked-page]").forEach((form) => {
+    const row = form.closest<HTMLElement>("[data-marked-content]")!;
+    const details = form.closest<HTMLDetailsElement>("details")!;
+    const input = form.querySelector<HTMLInputElement>("input")!;
+    const status = form.querySelector<HTMLOutputElement>("output")!;
+    form.querySelector("[data-cancel-marked-name]")?.addEventListener("click", () => { form.reset(); status.textContent = ""; details.open = false; });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (form.getAttribute("aria-busy") === "true") return;
+      form.setAttribute("aria-busy", "true");
+      const buttons = form.querySelectorAll<HTMLButtonElement>("button");
+      buttons.forEach((button) => { button.disabled = true; });
+      status.textContent = "Salvando…";
+      try {
+        const { bookmark } = await api<{ bookmark: Bookmark }>("/api/bookmarks", { method: "PATCH", body: JSON.stringify({ contentId: row.dataset.markedContent, page: Number(row.dataset.markedPage), name: input.value.trim() }) });
+        state.bookmarks = state.bookmarks.map((item) => item.contentId === bookmark.contentId && item.page === bookmark.page ? bookmark : item);
+        const title = bookmark.name || `Página ${bookmark.page + 1}`;
+        row.querySelector<HTMLElement>(".marked-page-name")!.textContent = title;
+        row.querySelector("[data-open-marked-page]")?.setAttribute("aria-label", `Ir para página ${bookmark.page + 1}: ${title}`);
+        input.value = input.defaultValue = bookmark.name ?? "";
+        status.textContent = "Nome salvo.";
+        details.open = false;
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : "Não foi possível salvar o nome.";
+      } finally {
+        form.setAttribute("aria-busy", "false");
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    });
   });
 }
 
@@ -3805,12 +5129,195 @@ function renderReaderBookmarks(bookmarks: Bookmark[]): string {
 }
 
 function getPageUrl(content: ContentItem, page: number): string {
-  const theme = state.reader?.content.id === content.id && content.pageTypes[page] === "epub" ? `?theme=${encodeURIComponent(state.reader.bookTheme)}` : "";
-  return `/api/contents/${encodeURIComponent(content.id)}/pages/${page}${theme}`;
+  if(content.pageTypes[page]==='pdf') return `/api/contents/${encodeURIComponent(content.id)}/pages/${page}?v=${encodeURIComponent(content.chapters[0]?.addedAt??'pdf-save-simple-20260914')}`;
+  if (state.reader?.content.id === content.id && content.pageTypes[page] === "epub") {
+    const params = new URLSearchParams();
+    params.set("theme", state.reader.bookTheme);
+    params.set("direction", state.reader.direction);
+    return `/api/contents/${encodeURIComponent(content.id)}/pages/${page}?${params.toString()}`;
+  }
+  const base = `/api/contents/${encodeURIComponent(content.id)}/pages/${page}`;
+  if (state.reader && state.reader.content.id === content.id && (content.pageTypes[page] ?? "image") === "image" && state.reader.zoom <= 100 && state.reader.fitting !== "original") {
+    const target = Math.ceil(window.innerWidth * Math.min(window.devicePixelRatio || 1, 2));
+    const width = [640, 960, 1280, 1600, 2048].find(value => value >= target);
+    if (width) return `${base}?width=${width}`;
+  }
+  return base;
 }
 
-function bindShellEvents(): void {
-  document.querySelector("#menu-button")?.addEventListener("click", () => {
+function touchReaderImageCache(key: string, entry: ReaderImageCacheEntry): void {
+  readerImageCache.delete(key);
+  readerImageCache.set(key, entry);
+  const decodedBytes = () => [...readerImageCache.values()].reduce((sum, cached) => sum + cached.image.naturalWidth * cached.image.naturalHeight * 4, 0);
+  while (readerImageCache.size > readerLimits.imageEntries || decodedBytes() > readerLimits.imageBytes) {
+    const oldestKey = readerImageCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    readerImageCache.delete(oldestKey);
+  }
+}
+
+function preloadReaderImage(content: ContentItem, page: number): Promise<void> {
+  if (page < 0 || page >= content.pageCount || (content.pageTypes[page] ?? "image") !== "image") {
+    return Promise.resolve();
+  }
+
+  const src = getPageUrl(content, page);
+  const key = `${content.id}:${page}:${src}`;
+  const cached = readerImageCache.get(key);
+  if (cached) {
+    touchReaderImageCache(key, cached);
+    return cached.ready;
+  }
+
+  const image = new Image();
+  image.decoding = "async";
+  image.fetchPriority = pendingReaderPage === page ? "high" : "low";
+  const ready = new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => {
+      void image.decode().catch(() => undefined).then(() => {
+        if (readerImageCache.has(key)) touchReaderImageCache(key, { image, ready });
+        resolve();
+      });
+    }, { once: true });
+    image.addEventListener("error", () => reject(new Error("Não foi possível carregar a página.")), { once: true });
+    image.src = src;
+  }).catch((error) => {
+    readerImageCache.delete(key);
+    throw error;
+  });
+
+  const entry = { image, ready };
+  touchReaderImageCache(key, entry);
+  return ready;
+}
+
+function preloadAdjacentReaderPages(content: ContentItem, page: number): void {
+  const generation = ++readerPrefetchGeneration;
+  epubPrefetch?.abort();
+  epubPrefetch = null;
+  if (!state.reader || state.reader.mode === "vertical-scroll") return;
+  if (content.pageTypes[page] === "epub") {
+    const offset = imagePrefetchOffsets(deviceHints(), readerPrefetchDirection)[0];
+    const next = page + (offset ?? 0);
+    if (offset && next >= 0 && next < content.pageCount) {
+      const controller = new AbortController();
+      epubPrefetch = controller;
+      void fetch(getPageUrl(content, next), { signal: controller.signal, cache: "force-cache" })
+        .then(async response => {
+          if (!response.ok || Number(response.headers.get("content-length")) > 2 * 1024 * 1024) { await response.body?.cancel(); return; }
+          await response.arrayBuffer();
+        }).catch(() => undefined);
+    }
+    return;
+  }
+  // A single speculative download at a time; stop when navigation changes.
+  void (async () => {
+    for (const offset of imagePrefetchOffsets(deviceHints(), readerPrefetchDirection)) {
+      if (generation !== readerPrefetchGeneration || state.reader?.content.id !== content.id) return;
+      await preloadReaderImage(content, page + offset).catch(() => undefined);
+    }
+  })();
+}
+
+function clearReaderLoadingTimer(): void {
+  if (readerLoadingTimer !== null) {
+    window.clearTimeout(readerLoadingTimer);
+    readerLoadingTimer = null;
+  }
+}
+
+function setReaderLoadStatus(status: "hidden" | "loading" | "error", message = "Carregando página…"): void {
+  const element = document.querySelector<HTMLElement>("[data-reader-load-status]");
+  if (!element) return;
+  const retry = element.querySelector<HTMLButtonElement>(".reader-load-retry");
+  const messageElement = element.querySelector<HTMLElement>("[data-reader-load-message]");
+  element.hidden = status === "hidden";
+  element.classList.toggle("is-error", status === "error");
+  if (messageElement) messageElement.textContent = message;
+  if (retry) retry.hidden = status !== "error";
+}
+
+function showReaderLoadingAfterDelay(navigationId = readerNavigationId): void {
+  clearReaderLoadingTimer();
+  readerLoadingTimer = window.setTimeout(() => {
+    readerLoadingTimer = null;
+    if (navigationId === readerNavigationId) setReaderLoadStatus("loading");
+  }, 180);
+}
+
+function bindReaderMediaLoadState(): void {
+  if (!state.reader || state.reader.mode === "vertical-scroll") return;
+  if (state.reader.content.pageTypes[state.reader.page] === "pdf") return;
+  const media = document.querySelector<HTMLImageElement | HTMLIFrameElement>("#reader-stage [data-reader-page-index]");
+  if (!media) return;
+
+  if (media instanceof HTMLImageElement && media.complete) {
+    if (media.naturalWidth > 0) {
+      void media.decode().catch(() => undefined).then(() => setReaderLoadStatus("hidden"));
+    } else {
+      pendingReaderPage = state.reader.page;
+      setReaderLoadStatus("error", "A página não pôde ser carregada.");
+    }
+    return;
+  }
+
+  showReaderLoadingAfterDelay();
+  media.addEventListener("load", () => {
+    clearReaderLoadingTimer();
+    setReaderLoadStatus("hidden");
+  }, { once: true });
+  media.addEventListener("error", () => {
+    clearReaderLoadingTimer();
+    pendingReaderPage = state.reader?.page ?? null;
+    setReaderLoadStatus("error", "A página não pôde ser carregada.");
+  }, { once: true });
+}
+
+function updatePagedReaderPage(content: ContentItem, page: number): boolean {
+  const stage = document.querySelector<HTMLElement>("#reader-stage");
+  if (!stage || !document.querySelector(".reader")) return false;
+  stage.innerHTML = renderReaderPages(content, page, state.reader?.mode ?? "horizontal");
+  renderReaderOverlay();
+  bindReaderEpubFrames();
+  bindReaderMediaLoadState();
+  preloadAdjacentReaderPages(content, page);
+  return true;
+}
+
+async function openUserHome(button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    try {
+      const startup = await api<{ libraryId: string | null }>("/api/me/startup").catch(() => ({ libraryId: null }));
+      state.search = "";
+      closeNavigationPanels();
+      closeMobileNavigation();
+      await router.navigate(startup.libraryId
+        ? { kind: "library", libraryId: startup.libraryId }
+        : { kind: "view", view: "home" });
+    } finally { button.disabled = false; }
+}
+
+function bindShellEvents(root: ParentNode = document): void {
+  const selectedSystem=root.querySelector<HTMLElement>('.library-system-tabs .active');
+  if(selectedSystem?.parentElement) {
+    const tabs=selectedSystem.parentElement;
+    tabs.scrollLeft=selectedSystem.offsetLeft-tabs.offsetLeft-Math.max(0,(tabs.clientWidth-selectedSystem.offsetWidth)/2);
+  }
+  root.querySelectorAll<HTMLAnchorElement>('[data-library-folder]').forEach(link => {
+    link.onclick = event => {
+      if(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)return;
+      event.preventDefault();
+      if(state.activeLibraryId)void router.navigate({kind:'library',libraryId:state.activeLibraryId,folder:link.dataset.libraryFolder || undefined});
+    };
+  });
+  const rpgPanel = root.querySelector<HTMLElement>('[data-rpg-panel]');
+  const rpgContent = state.activeSeriesId ? findContentById(state.activeSeriesId) : null;
+  if(rpgPanel && rpgContent)void bindRpgPanel(rpgPanel,rpgContent,state.user?.role === 'admin',async(id,reader)=>{
+    if(reader)await router.navigate({kind:'reader',libraryId:rpgContent.libraryId,contentId:id,page:1});
+    else await router.navigate({kind:'title',libraryId:rpgContent.libraryId,contentId:id});
+  });
+  if (root === document) bindMarkedPageActions();
+  root.querySelector("#menu-button")?.addEventListener("click", () => {
     if (isMobileViewport()) {
       state.mobileNavOpen = !state.mobileNavOpen;
       if (state.mobileNavOpen) {
@@ -3819,73 +5326,134 @@ function bindShellEvents(): void {
     } else {
       state.sidebarCollapsed = !state.sidebarCollapsed;
     }
-    renderShell();
+    renderNavigationMenus();
   });
 
-  document.querySelector("#home-button")?.addEventListener("click", () => {
-    state.search = "";
-    openView("home");
+  root.querySelector<HTMLButtonElement>("#home-button")?.addEventListener("click", event => {
+    void openUserHome(event.currentTarget as HTMLButtonElement);
   });
 
-  document.querySelector("#search-button")?.addEventListener("click", () => {
-    document.querySelector<HTMLInputElement>("#search")?.focus();
+  root.querySelector("#search-button")?.addEventListener("click", () => {
+    focusGlobalSearch();
   });
 
-  document.querySelector("#settings-button")?.addEventListener("click", () => {
+  root.querySelector<HTMLInputElement>("#global-search-input")?.addEventListener("input", (event) => {
+    globalSearchQuery = (event.currentTarget as HTMLInputElement).value;
+    const results = document.querySelector<HTMLElement>("#global-search-results");
+    if (results) results.innerHTML = renderGlobalSearchResults();
+    bindGlobalSearchResultEvents();
+  });
+
+  root.querySelectorAll<HTMLElement>("[data-global-search-close]").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (element.dataset.globalSearchClose === "backdrop" && event.target !== element) return;
+      closeGlobalSearch();
+    });
+  });
+  bindGlobalSearchResultEvents(root);
+
+  root.querySelector("#settings-button")?.addEventListener("click", () => {
     closeNavigationPanels();
     closeMobileNavigation();
-    state.activeView = "settings";
-    state.activeLibraryId = null;
-    state.activeSeriesId = null;
-    state.reader = null;
     state.settingsSection = state.user?.role === "admin" ? "server" : "account";
     state.serverSection = "libraries";
-    renderShell();
+    openView("settings");
   });
 
-  document.querySelector("#account-button")?.addEventListener("click", (event) => {
+  root.querySelector("#account-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     state.statsMenuOpen = false;
     state.accountMenuOpen = !state.accountMenuOpen;
     closeMobileNavigation();
-    renderShell();
+    renderNavigationMenus();
   });
 
-  document.querySelector("#stats-button")?.addEventListener("click", (event) => {
+  root.querySelector("#stats-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     state.accountMenuOpen = false;
     state.statsMenuOpen = !state.statsMenuOpen;
     closeMobileNavigation();
-    renderShell();
+    renderNavigationMenus();
   });
 
-  document.querySelector("#theme-toggle")?.addEventListener("click", () => {
+  root.querySelector("#theme-toggle")?.addEventListener("click", () => {
     state.darkMode = !state.darkMode;
     localStorage.setItem("pugotiread-dark-mode", state.darkMode ? "dark" : "light");
     applyTheme();
     renderShell();
   });
 
-  document.querySelector("#profile-button")?.addEventListener("click", () => {
+  root.querySelector("#profile-button")?.addEventListener("click", () => {
     openView("profile");
   });
 
-  document.querySelector("#mobile-nav-backdrop")?.addEventListener("click", () => {
+  root.querySelector("#mobile-nav-backdrop")?.addEventListener("click", () => {
     closeMobileNavigation();
-    renderShell();
+    renderNavigationMenus();
   });
 
-  document.querySelector("#add-library-button")?.addEventListener("click", () => {
+  root.querySelector<HTMLSelectElement>("#startup-user-select")?.addEventListener("change", event => {
+    startupSelectedUserId = (event.currentTarget as HTMLSelectElement).value;
+    renderShell();
+    document.querySelector<HTMLElement>("#startup-user-select")?.focus();
+  });
+
+  root.querySelectorAll<HTMLSelectElement>("[data-startup-user]").forEach(select => {
+    select.addEventListener("change", async () => {
+      const id = select.dataset.startupUser!;
+      const previous = startupLibraries[id] ?? "";
+      const status = select.closest(".startup-settings")!.querySelector<HTMLElement>("[data-startup-status]")!;
+      const userSelect = document.querySelector<HTMLSelectElement>("#startup-user-select")!;
+      select.disabled = true;
+      userSelect.disabled = true;
+      status.textContent = "Salvando…";
+      try {
+        const result = await api<{ settings: ServerSettings }>("/api/admin/settings", { method: "PATCH", body: JSON.stringify({ startupLibraries: { [id]: select.value } }) });
+        startupLibraries = result.settings.startupLibraries ?? {};
+        status.textContent = "Salvo";
+      } catch { select.value = previous; status.textContent = "Não foi possível salvar. Tente novamente."; }
+      finally { select.disabled = false; userSelect.disabled = false; }
+    });
+  });
+
+  root.querySelectorAll<HTMLFormElement>("[data-pdf-copy-access]").forEach(form => {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const contentId = form.dataset.pdfCopyAccess ?? "";
+      const status = form.querySelector<HTMLElement>("[role=status]")!;
+      const submit = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+      const data = new FormData(form);
+      submit.disabled = true;
+      status.textContent = "Salvando…";
+      try {
+        const result = await api<{ copy: PdfFormCopyAccess }>(`/api/admin/pdf-form-copies/${encodeURIComponent(contentId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            ownerUserId: String(data.get("ownerUserId") ?? ""),
+            visibility: String(data.get("visibility") ?? "private"),
+            system: String(data.get("system") ?? ""),
+            sharedWithUserIds: data.getAll("sharedWithUserIds").map(String)
+          })
+        });
+        state.pdfFormCopies = state.pdfFormCopies.map(copy => copy.contentId === contentId ? result.copy : copy);
+        status.textContent = "Acesso salvo";
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : "Não foi possível salvar.";
+      } finally { submit.disabled = false; }
+    });
+  });
+
+  root.querySelector("#add-library-button")?.addEventListener("click", () => {
     void openLibraryModal();
   });
 
-  document.querySelector("#add-personal-library-button")?.addEventListener("click", () => {
+  root.querySelector("#add-personal-library-button")?.addEventListener("click", () => {
     void openPersonalLibraryModal();
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-personal-library]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-personal-library]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -3893,7 +5461,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-library]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-library]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -3902,7 +5470,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-delete-personal-library]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-delete-personal-library]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -3910,7 +5478,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-delete-library]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-delete-library]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -3918,121 +5486,120 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelector("#vault-unlock-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#vault-unlock-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void unlockPersonalVault(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelector<HTMLInputElement>("#vault-password-input")?.addEventListener("keydown", (event) => {
+  root.querySelector<HTMLInputElement>("#vault-password-input")?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
     const form = (event.target as HTMLInputElement).form;
     if (form) void unlockPersonalVault(form);
   });
 
-  document.querySelector("#lock-vault-button")?.addEventListener("click", (event) => {
+  root.querySelector("#lock-vault-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     void lockPersonalVault();
   });
 
-  document.querySelector("[data-vault-menu]")?.addEventListener("click", (event) => {
+  root.querySelector("[data-vault-menu]")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     state.vaultMenuOpen = !state.vaultMenuOpen;
-    renderShell();
+    renderNavigationMenus();
   });
 
-  document.querySelector("#lock-vault-sidebar-button")?.addEventListener("click", (event) => {
+  root.querySelector("#lock-vault-sidebar-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     void lockPersonalVault();
   });
 
-  document.querySelector("#hide-vault-sidebar-button")?.addEventListener("click", (event) => {
+  root.querySelector("#hide-vault-sidebar-button")?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     toggleVaultMenuVisibility();
   });
 
-  document.querySelector("#add-collection-button")?.addEventListener("click", openCollectionModal);
-  document.querySelector("#add-user-button")?.addEventListener("click", () => openAdminUserModal("create"));
-  document.querySelector("#invite-user-button")?.addEventListener("click", () => openAdminUserModal("invite"));
+  root.querySelector("#add-collection-button")?.addEventListener("click", openCollectionModal);
+  root.querySelector("#add-user-button")?.addEventListener("click", () => openAdminUserModal("create"));
+  root.querySelector("#invite-user-button")?.addEventListener("click", () => openAdminUserModal("invite"));
 
-  document.querySelector("#close-library-modal")?.addEventListener("click", closeLibraryModal);
-  document.querySelector("#cancel-library-modal")?.addEventListener("click", closeLibraryModal);
-  document.querySelector("#close-collection-modal")?.addEventListener("click", closeCollectionModal);
-  document.querySelector("#cancel-collection-modal")?.addEventListener("click", closeCollectionModal);
-  document.querySelector("#close-collection-share-modal")?.addEventListener("click", closeCollectionShareModal);
-  document.querySelector("#cancel-collection-share-modal")?.addEventListener("click", closeCollectionShareModal);
-  document.querySelector("#close-collection-delete-modal")?.addEventListener("click", closeCollectionDeleteModal);
-  document.querySelector("#cancel-collection-delete-modal")?.addEventListener("click", closeCollectionDeleteModal);
-  document.querySelector("#confirm-collection-delete")?.addEventListener("click", () => {
+  root.querySelector("#close-library-modal")?.addEventListener("click", closeLibraryModal);
+  root.querySelector("#cancel-library-modal")?.addEventListener("click", closeLibraryModal);
+  root.querySelector("#close-collection-modal")?.addEventListener("click", closeCollectionModal);
+  root.querySelector("#cancel-collection-modal")?.addEventListener("click", closeCollectionModal);
+  root.querySelector("#close-collection-share-modal")?.addEventListener("click", closeCollectionShareModal);
+  root.querySelector("#cancel-collection-share-modal")?.addEventListener("click", closeCollectionShareModal);
+  root.querySelector("#close-collection-delete-modal")?.addEventListener("click", closeCollectionDeleteModal);
+  root.querySelector("#cancel-collection-delete-modal")?.addEventListener("click", closeCollectionDeleteModal);
+  root.querySelector("#confirm-collection-delete")?.addEventListener("click", () => {
     void deleteCollection();
   });
-  document.querySelector("#close-user-modal")?.addEventListener("click", closeAdminUserModal);
-  document.querySelector("#cancel-user-modal")?.addEventListener("click", closeAdminUserModal);
-  document.querySelector("#user-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#close-user-modal")?.addEventListener("click", closeAdminUserModal);
+  root.querySelector("#cancel-user-modal")?.addEventListener("click", closeAdminUserModal);
+  root.querySelector("#user-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitAdminUserForm(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelector("#create-link-invite-button")?.addEventListener("click", (event) => {
+  root.querySelector("#create-link-invite-button")?.addEventListener("click", (event) => {
     const form = (event.currentTarget as HTMLElement).closest("form");
     if (form instanceof HTMLFormElement) {
       void createLinkOnlyInvite(form);
     }
   });
-  document.querySelector("#close-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
-  document.querySelector("#cancel-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
-  document.querySelector("#confirm-user-delete")?.addEventListener("click", () => {
+  root.querySelector("#close-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
+  root.querySelector("#cancel-user-delete-modal")?.addEventListener("click", closeAdminUserDeleteModal);
+  root.querySelector("#confirm-user-delete")?.addEventListener("click", () => {
     void deleteAdminUser();
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-open-person]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-open-person]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.activePeopleUserId = button.dataset.openPerson ?? null;
-      renderShell();
+      const userId = button.dataset.openPerson;
+      if (userId) void router.navigate({ kind: "person", userId });
     });
   });
 
-  document.querySelector("#back-to-people")?.addEventListener("click", () => {
-    state.activePeopleUserId = null;
-    renderShell();
+  root.querySelector("#back-to-people")?.addEventListener("click", () => {
+    openView("people");
   });
 
-  document.querySelectorAll<HTMLFormElement>("[data-person-recommendation-form]").forEach((form) => {
+  root.querySelectorAll<HTMLFormElement>("[data-person-recommendation-form]").forEach((form) => {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       void savePersonCollectionRecommendations(form);
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-user]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-user]").forEach((button) => {
     button.addEventListener("click", () => {
       openAdminUserModal("edit", button.dataset.editUser ?? null);
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-delete-user]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-delete-user]").forEach((button) => {
     button.addEventListener("click", () => {
       openAdminUserDeleteModal(button.dataset.deleteUser ?? "");
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-copy-invite]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-copy-invite]").forEach((button) => {
     button.addEventListener("click", async () => {
       await navigator.clipboard.writeText(state.adminUserInviteUrl);
     });
   });
-  document.querySelector("#collection-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#collection-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void createCollection();
   });
-  document.querySelector("#collection-share-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#collection-share-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveCollectionSharing(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-collection]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4040,7 +5607,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-share-collection]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-share-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4048,7 +5615,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-delete-collection]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-delete-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4056,7 +5623,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-cancel-collection-edit]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-cancel-collection-edit]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4064,14 +5631,14 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLFormElement>("[data-collection-edit-form]").forEach((form) => {
+  root.querySelectorAll<HTMLFormElement>("[data-collection-edit-form]").forEach((form) => {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       void saveCollectionEdit(form);
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-collection-content]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-collection-content]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4079,30 +5646,28 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelector("#profile-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#profile-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveProfile(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelector("#edit-profile-button")?.addEventListener("click", () => {
-    state.profileEditing = true;
-    state.profileError = "";
-    renderShell();
+  root.querySelector("#edit-profile-button")?.addEventListener("click", () => {
+    window.location.assign(`https://pugotilab.com/auth/profile?return=${encodeURIComponent(window.location.href)}`);
   });
 
-  document.querySelector("#cancel-profile-edit")?.addEventListener("click", () => {
+  root.querySelector("#cancel-profile-edit")?.addEventListener("click", () => {
     state.profileEditing = false;
     state.profileError = "";
     state.profileFavoriteSearch = "";
     renderShell();
   });
 
-  document.querySelector("#profile-favorite-search")?.addEventListener("input", (event) => {
+  root.querySelector("#profile-favorite-search")?.addEventListener("input", (event) => {
     state.profileFavoriteSearch = (event.currentTarget as HTMLInputElement).value;
     updateProfileFavoriteResults();
   });
 
-  document.querySelector("#profile-favorite-results")?.addEventListener("click", (event) => {
+  root.querySelector("#profile-favorite-results")?.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-add-profile-favorite]");
     if (!button) {
       return;
@@ -4111,19 +5676,19 @@ function bindShellEvents(): void {
     addProfileFavorite(button.dataset.addProfileFavorite ?? "");
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-profile-favorite]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-profile-favorite]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       removeProfileFavorite(button.dataset.removeProfileFavorite ?? "");
     });
   });
 
-  document.querySelector("#remove-profile-avatar")?.addEventListener("click", (event) => {
+  root.querySelector("#remove-profile-avatar")?.addEventListener("click", (event) => {
     event.preventDefault();
     void removeProfileAvatar();
   });
 
-  document.querySelector("#request-profile-password-reset")?.addEventListener("click", async () => {
+  root.querySelector("#request-profile-password-reset")?.addEventListener("click", async () => {
     if (!state.user?.email) {
       state.profilePasswordError = "Esta conta não possui e-mail cadastrado.";
       state.profilePasswordMessage = "";
@@ -4144,7 +5709,7 @@ function bindShellEvents(): void {
     }
   });
 
-  document.querySelector("#profile-password-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#profile-password-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const formData = new FormData(form);
@@ -4179,7 +5744,7 @@ function bindShellEvents(): void {
     })();
   });
 
-  document.querySelector("#library-next-button")?.addEventListener("click", () => {
+  root.querySelector("#library-next-button")?.addEventListener("click", () => {
     const nextStep = getNextLibraryModalStep(state.libraryModalStep);
     if (!canMoveLibraryStep(nextStep)) {
       renderShell();
@@ -4189,14 +5754,14 @@ function bindShellEvents(): void {
     renderShell();
   });
 
-  document.querySelector("#library-back-button")?.addEventListener("click", () => {
+  root.querySelector("#library-back-button")?.addEventListener("click", () => {
     syncLibraryDraftFromInputs();
     state.libraryModalError = "";
     state.libraryModalStep = getPreviousLibraryModalStep(state.libraryModalStep);
     renderShell();
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-library-modal-step]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-library-modal-step]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextStep = button.dataset.libraryModalStep as AppState["libraryModalStep"];
       if (!canMoveLibraryStep(nextStep)) {
@@ -4208,7 +5773,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-folder-path]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-folder-path]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         await loadFolderBrowser(button.dataset.folderPath);
@@ -4220,7 +5785,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelector("#select-current-folder")?.addEventListener("click", () => {
+  root.querySelector("#select-current-folder")?.addEventListener("click", () => {
     if (!state.folderBrowser) {
       return;
     }
@@ -4228,7 +5793,7 @@ function bindShellEvents(): void {
     renderShell();
   });
 
-  document.querySelector("#create-library-button")?.addEventListener("click", async () => {
+  root.querySelector("#create-library-button")?.addEventListener("click", async () => {
     syncLibraryDraftFromInputs();
     if (!canMoveLibraryStep("advanced")) {
       renderShell();
@@ -4266,11 +5831,14 @@ function bindShellEvents(): void {
     }
   });
 
-  document.querySelector("#logout-button")?.addEventListener("click", async () => {
+  root.querySelector("#logout-button")?.addEventListener("click", async () => {
+    clearPdfFormDrafts();
     await api<void>("/api/logout", { method: "POST" });
     const authConfig = await getPugotilabAuthConfig();
     clearVaultInactivityTimer();
     state.user = null;
+    state.vaultHiddenFromMenu = true;
+    state.vaultMenuOpen = false;
     state.personalLibraries = [];
     state.vaultUnlocked = false;
     state.vaultToken = "";
@@ -4283,7 +5851,7 @@ function bindShellEvents(): void {
     window.location.assign(buildAuthUrl(authConfig.logoutUrl, window.location.origin + "/"));
   });
 
-  document.querySelector("#search")?.addEventListener("keydown", (event) => {
+  root.querySelector("#search")?.addEventListener("keydown", (event) => {
     const keyboardEvent = event as KeyboardEvent;
     const input = keyboardEvent.target as HTMLInputElement;
     if (keyboardEvent.key === "Tab") {
@@ -4316,17 +5884,17 @@ function bindShellEvents(): void {
     renderShell();
   });
 
-  document.querySelector("#search")?.addEventListener("input", (event) => {
+  root.querySelector("#search")?.addEventListener("input", (event) => {
     updateSearchSuggestion(event.target as HTMLInputElement);
   });
 
-  document.querySelector("#search")?.addEventListener("blur", (event) => {
+  root.querySelector("#search")?.addEventListener("blur", (event) => {
     const input = event.target as HTMLInputElement;
     input.value = "";
     updateSearchSuggestion(input);
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-nav-view]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-nav-view]").forEach((button) => {
     button.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("[data-vault-menu], #lock-vault-sidebar-button, .library-context-menu")) {
         return;
@@ -4334,16 +5902,12 @@ function bindShellEvents(): void {
       const nextView = (button.dataset.navView as AppState["activeView"]) ?? "home";
       closeNavigationPanels();
       closeMobileNavigation();
-      state.activeView = nextView;
-      state.activeLibraryId = null;
-      state.activeSeriesId = null;
-      state.activePeopleUserId = null;
-      state.reader = null;
-      renderShell();
+      if (nextView === "home") void openUserHome(button);
+      else openView(nextView);
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextSection = button.dataset.settingsSection as AppState["settingsSection"];
       if (nextSection === "server" && state.user?.role !== "admin") {
@@ -4358,7 +5922,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-server-section]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-server-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextSection = button.dataset.serverSection as AppState["serverSection"];
       if (state.user?.role !== "admin") {
@@ -4371,12 +5935,12 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelector("#vault-settings-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#vault-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveVaultSettings(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelector("#sync-library-select")?.addEventListener("change", (event) => {
+  root.querySelector("#sync-library-select")?.addEventListener("change", (event) => {
     state.syncLibraryId = (event.target as HTMLSelectElement).value;
     state.syncContentId = "";
     state.syncMessage = "";
@@ -4384,40 +5948,44 @@ function bindShellEvents(): void {
     renderShell();
   });
 
-  document.querySelector("#sync-settings-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#sync-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void synchronizeLibrary(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelector("#reading-settings-form")?.addEventListener("submit", (event) => {
+  root.querySelector("#direct-download-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void startDirectDownload(event.currentTarget as HTMLFormElement);
+  });
+
+  root.querySelector("#reading-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveReadingModeSettings(event.currentTarget as HTMLFormElement);
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-library-id]").forEach((button) => {
+  root.querySelectorAll<HTMLElement>("[data-library-id]").forEach((button) => {
     button.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("[data-library-menu-id], [data-scan-library-id], .library-context-menu")) {
         return;
       }
 
       state.openLibraryMenuId = null;
-      state.activeSeriesId = null;
       closeMobileNavigation();
       void loadLibrary(button.dataset.libraryId ?? "");
     });
   });
 
-  document.querySelectorAll<HTMLElement>("[data-library-menu-id]").forEach((button) => {
+  root.querySelectorAll<HTMLElement>("[data-library-menu-id]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const libraryId = button.dataset.libraryMenuId ?? "";
       state.openLibraryMenuId = state.openLibraryMenuId === libraryId ? null : libraryId;
-      renderShell();
+      renderNavigationMenus();
     });
   });
 
-  document.querySelectorAll<HTMLElement>("[data-scan-library-id]").forEach((button) => {
+  root.querySelectorAll<HTMLElement>("[data-scan-library-id]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4426,7 +5994,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-open]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-open]").forEach((button) => {
     button.addEventListener("click", () => {
       state.openSeriesMenuId = null;
       state.openSeriesAddMenuId = null;
@@ -4436,7 +6004,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-menu-key]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-menu-key]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4445,18 +6013,18 @@ function bindShellEvents(): void {
       state.openSeriesMenuId = isOpen ? null : menuKey;
       state.openSeriesAddMenuId = null;
       state.openSeriesRemoveMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-add-menu-key]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-add-menu-key]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const menuKey = button.dataset.seriesAddMenuKey ?? "";
       state.openSeriesAddMenuId = menuKey;
       state.openSeriesRemoveMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
     button.addEventListener("mouseenter", () => {
       const menuKey = button.dataset.seriesAddMenuKey ?? "";
@@ -4466,7 +6034,7 @@ function bindShellEvents(): void {
 
       state.openSeriesAddMenuId = menuKey;
       state.openSeriesRemoveMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
     button.addEventListener("focus", () => {
       const menuKey = button.dataset.seriesAddMenuKey ?? "";
@@ -4476,18 +6044,18 @@ function bindShellEvents(): void {
 
       state.openSeriesAddMenuId = menuKey;
       state.openSeriesRemoveMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-remove-menu-key]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-remove-menu-key]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const menuKey = button.dataset.seriesRemoveMenuKey ?? "";
       state.openSeriesRemoveMenuId = menuKey;
       state.openSeriesAddMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
     button.addEventListener("mouseenter", () => {
       const menuKey = button.dataset.seriesRemoveMenuKey ?? "";
@@ -4497,7 +6065,7 @@ function bindShellEvents(): void {
 
       state.openSeriesRemoveMenuId = menuKey;
       state.openSeriesAddMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
     button.addEventListener("focus", () => {
       const menuKey = button.dataset.seriesRemoveMenuKey ?? "";
@@ -4507,11 +6075,11 @@ function bindShellEvents(): void {
 
       state.openSeriesRemoveMenuId = menuKey;
       state.openSeriesAddMenuId = null;
-      renderShell();
+      renderNavigationMenus();
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-add-want]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-add-want]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4519,7 +6087,15 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-add-reading-list]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-profile-favorite-toggle]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void setProfileFavoriteFromMenu(button.dataset.profileFavoriteToggle ?? "", button.dataset.profileFavoriteEnabled === "true");
+    });
+  });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-add-reading-list]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4527,7 +6103,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-add-collection]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-add-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4535,7 +6111,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-want]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-want]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4543,7 +6119,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-reading-list]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-reading-list]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4551,7 +6127,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-reading-now]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-reading-now]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4559,7 +6135,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-collection]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-remove-collection]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4567,7 +6143,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-mark-read]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-mark-read]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4575,7 +6151,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-mark-unread]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-mark-unread]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4583,7 +6159,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-scan]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-scan]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4591,7 +6167,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-sync]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-sync]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4599,7 +6175,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-continue]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-continue]").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4609,7 +6185,6 @@ function bindShellEvents(): void {
       }
 
       openReaderAtProgress(content);
-      renderShell();
       if (state.reader?.mode === "vertical-scroll") {
         const p = state.reader.page;
         requestAnimationFrame(() => scrollReaderToPage(p));
@@ -4617,7 +6192,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-mark-toggle]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-mark-toggle]").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4626,16 +6201,17 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-back]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-back]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.activeSeriesId = null;
-      state.seriesTab = "chapters";
-      state.seriesReviewError = "";
-      renderShell();
+      if (state.activeLibraryId) {
+        const previous=parseRoute(window.history.state?.previousPath ?? '/');
+        router.backTo(previous.kind==='library' && previous.libraryId===state.activeLibraryId ? previous : {kind:'library',libraryId:state.activeLibraryId});
+      }
+      else openView("home");
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-chapter-open]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-chapter-open]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4649,28 +6225,37 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelector("#reader-stage")?.addEventListener("scroll", () => {
+  root.querySelector("#reader-stage")?.addEventListener("scroll", () => {
+    if (state.reader?.content.pageTypes.includes("epub")) {
+      const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+      if (frame && state.reader.mode === "vertical-scroll") scheduleEpubPosition(frame);
+      return;
+    }
     if (!state.reader || state.reader.mode !== "vertical-scroll") {
       return;
     }
-    syncReaderPageFromScroll();
+    if (readerScrollRaf !== null) return;
+    readerScrollRaf = requestAnimationFrame(() => {
+      readerScrollRaf = null;
+      syncReaderPageFromScroll();
+    });
   });
 
-  document.querySelectorAll<HTMLSelectElement>("[data-series-order]").forEach((select) => {
+  root.querySelectorAll<HTMLSelectElement>("[data-series-order]").forEach((select) => {
     select.addEventListener("change", () => {
       state.seriesChapterOrder = select.value as AppState["seriesChapterOrder"];
       renderShell();
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-layout]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-layout]").forEach((button) => {
     button.addEventListener("click", () => {
       state.seriesChapterLayout = button.dataset.seriesLayout === "grid" ? "grid" : "list";
       renderShell();
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-home-layout]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-home-layout]").forEach((button) => {
     button.addEventListener("click", () => {
       state.homeLayout = button.dataset.homeLayout === "list" ? "list" : "grid";
       localStorage.setItem("pugotiread-home-layout", state.homeLayout);
@@ -4678,7 +6263,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-series-tab]").forEach((button) => {
+  root.querySelectorAll<HTMLButtonElement>("[data-series-tab]").forEach((button) => {
     button.addEventListener("click", async () => {
       const nextTab = button.dataset.seriesTab as AppState["seriesTab"];
       state.seriesTab = nextTab;
@@ -4690,7 +6275,7 @@ function bindShellEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLFormElement>("[data-review-form]").forEach((form) => {
+  root.querySelectorAll<HTMLFormElement>("[data-review-form]").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const content = getSelectedSeries();
@@ -4728,6 +6313,64 @@ function bindShellEvents(): void {
   });
 }
 
+function focusGlobalSearch(): void {
+  if (state.reader) return;
+  globalSearchOpen = true;
+  globalSearchQuery = "";
+  globalSearchExtraContents = [];
+  const request = ++globalSearchRequest;
+  renderShell();
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLInputElement>("#global-search-input")?.focus({ preventScroll: true });
+  });
+  const extraLibraries = [...state.libraries.filter((library) => !globallyListedLibraryKinds.has(library.kind)),
+    ...(state.vaultUnlocked ? state.personalLibraries : [])];
+  void loadLibraryContents(extraLibraries).then((contents) => {
+    if (!globalSearchOpen || request !== globalSearchRequest) return;
+    globalSearchExtraContents = contents;
+    const results = document.querySelector<HTMLElement>("#global-search-results");
+    if (results) results.innerHTML = renderGlobalSearchResults();
+    bindGlobalSearchResultEvents();
+  });
+}
+
+function closeGlobalSearch(): void {
+  if (!globalSearchOpen) return;
+  globalSearchOpen = false;
+  globalSearchQuery = "";
+  globalSearchExtraContents = [];
+  globalSearchRequest++;
+  renderShell();
+  requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#search-button")?.focus({ preventScroll: true }));
+}
+
+function closeGlobalSearchFromOutside(target: EventTarget | null): void {
+  const element = target instanceof Element ? target : null;
+  if (globalSearchOpen && !element?.closest(".global-search-panel, .search-menu-shell")) {
+    closeGlobalSearch();
+  }
+}
+
+function toggleGlobalSearch(): void {
+  if (globalSearchOpen) closeGlobalSearch();
+  else focusGlobalSearch();
+}
+
+function bindGlobalSearchResultEvents(root: ParentNode = document): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-global-search-result]").forEach((button) => {
+    button.onclick = () => {
+      const contentId = button.dataset.globalSearchResult;
+      const libraryId = button.dataset.libraryId;
+      if (!contentId || !libraryId) return;
+      globalSearchOpen = false;
+      globalSearchQuery = "";
+      globalSearchExtraContents = [];
+      globalSearchRequest++;
+      void router.navigate({ kind: "title", libraryId, contentId });
+    };
+  });
+}
+
 function findContentById(contentId: string): ContentItem | null {
   return getAvailableContents().find((item) => item.id === contentId) ?? null;
 }
@@ -4758,8 +6401,13 @@ function isPageBookmarked(contentId: string, page: number): boolean {
   return state.bookmarks.some((bookmark) => bookmark.contentId === contentId && bookmark.page === page);
 }
 
-async function setReaderPage(page: number): Promise<void> {
+async function setReaderPage(page: number, force = false, epubTargetOffset = 0): Promise<void> {
   if (!state.reader) {
+    return;
+  }
+
+  if (state.reader.content.pageTypes.includes("pdf")) {
+    navegarParaPaginaPdf(page + 1);
     return;
   }
 
@@ -4768,19 +6416,46 @@ async function setReaderPage(page: number): Promise<void> {
   const maxPage = Math.max(state.reader.content.pageCount - 1, 0);
   const newPage = Math.min(Math.max(page, 0), maxPage);
   const oldPage = state.reader.page;
-  state.reader.page = newPage;
+  if (newPage !== oldPage && state.reader.content.pageTypes.includes("epub")) state.reader.epubOffset = clampEpubOffset(epubTargetOffset);
+  readerPrefetchDirection = newPage < oldPage ? -1 : 1;
+  readerPrefetchGeneration += 1;
+  if (newPage === oldPage && !force) return;
 
-  renderShell();
   if (mode === "vertical-scroll") {
+    state.reader.page = newPage;
+    syncReaderRoute();
+    renderShell();
     requestAnimationFrame(() => scrollReaderToPage(newPage));
-  }
+  } else {
+    const content = state.reader.content;
+    const navigationId = ++readerNavigationId;
+    pendingReaderPage = newPage;
 
-  if (newPage === oldPage) return;
+    if ((content.pageTypes[newPage] ?? "image") === "image") {
+      showReaderLoadingAfterDelay(navigationId);
+      try {
+        await preloadReaderImage(content, newPage);
+      } catch {
+        clearReaderLoadingTimer();
+        if (navigationId === readerNavigationId && state.reader?.content.id === contentId) {
+          setReaderLoadStatus("error", "A página não pôde ser carregada.");
+        }
+        return;
+      }
+      if (navigationId !== readerNavigationId || state.reader?.content.id !== contentId) return;
+    }
+
+    clearReaderLoadingTimer();
+    state.reader.page = newPage;
+    syncReaderRoute();
+    pendingReaderPage = null;
+    if (!updatePagedReaderPage(content, newPage)) renderShell();
+  }
 
   try {
     await api<void>("/api/progress", {
       method: "PUT",
-      body: JSON.stringify({ contentId, currentPage: newPage })
+      body: JSON.stringify({ contentId, currentPage: newPage, epubOffset: state.reader?.content.pageTypes.includes("epub") ? state.reader.epubOffset : 0 })
     });
     await refreshProgress();
   } catch (error) {
@@ -4789,67 +6464,144 @@ async function setReaderPage(page: number): Promise<void> {
 }
 
 async function toggleReaderFullscreen(): Promise<void> {
-  if (!state.reader || !document.fullscreenEnabled) {
+  if (!state.reader || readerFullscreenPending || !isReaderFullscreenAvailable()) return;
+  readerFullscreenPending = true;
+  updateReaderFullscreenButton();
+  const feedback = document.querySelector<HTMLElement>(".reader-pdf-feedback");
+  if (feedback) feedback.hidden = true;
+  try {
+    if (isReaderFullscreen()) {
+      await exitReaderFullscreen();
+    } else {
+      // A raiz permanece conectada mesmo quando o leitor atualiza seus controles.
+      const root = document.documentElement as FullscreenElement;
+      if (root.requestFullscreen && document.fullscreenEnabled) await root.requestFullscreen();
+      else await root.webkitRequestFullscreen?.();
+    }
+  } catch (error) {
+    console.error("Não foi possível alternar a tela cheia", error);
+    if (feedback?.isConnected) {
+      feedback.textContent = "Não foi possível ativar a tela cheia. Tente novamente ou verifique as permissões do navegador.";
+      feedback.hidden = false;
+    }
+  } finally {
+    readerFullscreenPending = false;
+    updateReaderFullscreenButton();
+  }
+}
+
+function mostrarFeedbackPdf(mensagem: string): void {
+  const feedback = document.querySelector<HTMLElement>(".reader-pdf-feedback");
+  if (!feedback) return;
+  feedback.textContent = mensagem;
+  feedback.hidden = false;
+}
+
+function imprimirPdfAberto(): void {
+  if (!state.reader?.content.pageTypes.includes("pdf")) return;
+  const url = document.querySelector<HTMLElement>(".reader-pdf[data-pdf-url]")?.dataset.pdfUrl;
+  if (!url) {
+    mostrarFeedbackPdf("Não foi possível localizar o PDF para impressão.");
     return;
   }
 
-  try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-    } else {
-      await document.documentElement.requestFullscreen();
-    }
-    updateReaderFullscreenButton();
-  } catch (error) {
-    console.error(error);
+  const destino = new URL("/pdf-print.html", window.location.origin);
+  destino.searchParams.set("url", url);
+  destino.searchParams.set("title", state.reader.content.title);
+  destino.searchParams.set("v", "pdf-print-dialog-20260925");
+  const janela = window.open(destino.href, "_blank");
+  if (janela) {
+    janela.opener = null;
+  } else {
+    mostrarFeedbackPdf("Permita abrir uma nova aba para imprimir o PDF e clique novamente.");
   }
 }
 
 function updateReaderFullscreenButton(): void {
-  const button = document.querySelector<HTMLButtonElement>('[data-reader-action="fullscreen"]');
+  const button = document.querySelector<HTMLButtonElement>(".reader-pdf-fullscreen, .reader-fullscreen");
   if (!button) {
     return;
   }
 
-  const label = getReaderFullscreenLabel();
-  const icon = isReaderFullscreen() ? "fullscreenExit" : "fullscreen";
+  const available = isReaderFullscreenAvailable();
+  const label = available ? getReaderFullscreenLabel() : "Tela cheia indisponível neste navegador";
   const iconElement = button.querySelector<HTMLElement>(".icon");
   if (iconElement) {
-    iconElement.innerHTML = renderIcon(icon);
+    if (button.classList.contains("reader-fullscreen")) {
+      iconElement.innerHTML = renderReaderFullscreenIcon();
+    } else {
+      iconElement.innerHTML = isReaderFullscreen()
+        ? renderIconeToolbarPdf("M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3")
+        : renderIconeToolbarPdf("M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3");
+    }
   }
   button.title = label;
   button.setAttribute("aria-label", label);
+  button.disabled = !available || readerFullscreenPending;
+  button.setAttribute("aria-pressed", String(isReaderFullscreen()));
+  button.setAttribute("aria-busy", String(readerFullscreenPending));
 }
 
 function getLibraryForContent(content: ContentItem): Library | null {
   return [...state.libraries, ...state.personalLibraries].find((library) => library.id === content.libraryId) ?? null;
 }
 
+function safeReaderPage(content: ContentItem, page: number): number {
+  const index = Number.isSafeInteger(page) ? Math.max(0, page) : 0;
+  return content.pageTypes.includes("pdf") ? index : Math.min(index, Math.max(content.pageCount - 1, 0));
+}
+
 function openReader(content: ContentItem, page: number): void {
-  const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
+  if (!findContentById(content.id)) state.contents = [...state.contents, content];
+  void router.navigate({ kind: "reader", libraryId: content.libraryId, contentId: content.id, page: safeReaderPage(content, page) + 1 });
+}
+
+function activateReader(content: ContentItem, page: number): void {
+  epubPanel = "none";
+  const safePage = safeReaderPage(content, page);
   const library = getLibraryForContent(content);
   const defaults = state.readingSettingsDraft[library?.kind ?? "other"];
+  const epub = content.pageTypes.includes("epub");
+  const savedProgress = getProgressForContent(content.id);
+  const savedAppearance = (() => {
+    try { return JSON.parse(localStorage.getItem(`pugotiread-epub-appearance:${state.user?.id}`) ?? "{}"); }
+    catch { return {}; }
+  })() as Record<string, unknown>;
   state.reader = {
     content,
     page: safePage,
-    mode: defaults.mode,
+    mode: defaults.mode === "paged-vertical" ? "vertical-scroll" : defaults.mode,
     fitting: defaults.fitting,
+    direction: "ltr",
     zoom: 100,
     brightness: 100,
-    bookTheme: "light",
-    controlsVisible: defaults.controlsVisible || content.pageTypes.includes("epub")
+    bookTheme: savedAppearance.theme === "sepia" || savedAppearance.theme === "dark" ? savedAppearance.theme : "light",
+    epubOffset: epub && savedProgress?.currentPage === safePage ? clampEpubOffset(savedProgress.epubOffset ?? 0) : 0,
+    epubLengths: [],
+    epubFont: savedAppearance.font === "sans" ? "sans" : "serif",
+    epubFontSize: typeof savedAppearance.size === "number" ? Math.min(Math.max(savedAppearance.size, 14), 32) : 20,
+    epubLineHeight: typeof savedAppearance.line === "number" ? Math.min(Math.max(savedAppearance.line, 1.3), 2.2) : 1.7,
+    epubMargin: typeof savedAppearance.margin === "number" ? Math.min(Math.max(savedAppearance.margin, 12), 64) : 28,
+    controlsVisible: defaults.controlsVisible
   };
   state.activeSeriesId = content.id;
-  rememberReadingProgress(content, safePage);
+  rememberReadingProgress(content, safePage, state.reader.epubOffset);
+  if (epub) {
+    void api<{ lengths: number[] }>(`/api/contents/${encodeURIComponent(content.id)}/epub-metrics`)
+      .then(({ lengths }) => {
+        if (state.reader?.content.id !== content.id) return;
+        state.reader.epubLengths = lengths;
+        renderEpubOverlay();
+      }).catch(error => console.error("Métricas do EPUB", error));
+  }
 }
 
 function openReaderAtPageAndRender(content: ContentItem, page: number): void {
   openReader(content, page);
-  renderShell();
 }
 
 function syncReaderPageFromScroll(): void {
-  if (!state.reader || state.reader.mode !== "vertical-scroll") {
+  if (!state.reader || state.reader.content.pageTypes.includes("pdf") || state.reader.mode !== "vertical-scroll") {
     return;
   }
 
@@ -4857,7 +6609,44 @@ function syncReaderPageFromScroll(): void {
   if (visiblePage === null) {
     return;
   }
+  if (visiblePage === state.reader.page) {
+    return;
+  }
   state.reader.page = visiblePage;
+  syncReaderRoute();
+  renderReaderOverlay();
+  scheduleReaderProgressSave(state.reader.content, visiblePage);
+}
+
+function scheduleReaderProgressSave(content: ContentItem, page: number, epubOffset = 0): void {
+  if (!state.user) {
+    return;
+  }
+
+  const safePage = safeReaderPage(content, page);
+  const nextProgress: ReadingProgress = {
+    userId: state.user.id,
+    contentId: content.id,
+    currentPage: safePage,
+    epubOffset,
+    updatedAt: new Date().toISOString()
+  };
+  state.progress = [
+    nextProgress,
+    ...state.progress.filter((progress) => progress.contentId !== content.id)
+  ];
+
+  if (readerProgressSaveTimer !== null) {
+    window.clearTimeout(readerProgressSaveTimer);
+  }
+
+  readerProgressSaveTimer = window.setTimeout(() => {
+    readerProgressSaveTimer = null;
+    void api<void>("/api/progress", {
+      method: "PUT",
+      body: JSON.stringify({ contentId: content.id, currentPage: safePage, epubOffset })
+    }).catch((error) => console.error(error));
+  }, 1200);
 }
 
 function getVisibleReaderPage(): number | null {
@@ -4896,22 +6685,14 @@ function scrollReaderToPage(page: number): void {
     return;
   }
 
-  // wait for all images before the target to load so offsetTop is correct
-  if (page > 0) {
-    const allLoaded = Array.from(stage.querySelectorAll<HTMLElement>("[data-reader-page-index]")).every((el) => {
-      const idx = parseInt(el.getAttribute("data-reader-page-index") || "0", 10);
-      if (idx >= page) return true;
-      if (el instanceof HTMLImageElement) return el.complete && el.naturalHeight > 0;
-      return true;
-    });
-
-    if (!allLoaded) {
-      requestAnimationFrame(() => scrollReaderToPage(page));
-      return;
-    }
-  }
-
   stage.scrollTop = target.offsetTop;
+  if (target instanceof HTMLImageElement && !target.complete) {
+    target.addEventListener("load", () => {
+      requestAnimationFrame(() => {
+        if (state.reader?.mode === "vertical-scroll") stage.scrollTop = target.offsetTop;
+      });
+    }, { once: true });
+  }
 }
 
 function openReaderAtProgress(content: ContentItem): void {
@@ -4919,16 +6700,17 @@ function openReaderAtProgress(content: ContentItem): void {
   openReader(content, progress?.currentPage ?? 0);
 }
 
-function rememberReadingProgress(content: ContentItem, page: number): void {
+function rememberReadingProgress(content: ContentItem, page: number, epubOffset = 0): void {
   if (!state.user) {
     return;
   }
 
-  const safePage = Math.min(Math.max(page, 0), Math.max(content.pageCount - 1, 0));
+  const safePage = safeReaderPage(content, page);
   const nextProgress: ReadingProgress = {
     userId: state.user.id,
     contentId: content.id,
     currentPage: safePage,
+    epubOffset,
     updatedAt: new Date().toISOString()
   };
   state.progress = [
@@ -4938,7 +6720,7 @@ function rememberReadingProgress(content: ContentItem, page: number): void {
 
   void api<void>("/api/progress", {
     method: "PUT",
-    body: JSON.stringify({ contentId: content.id, currentPage: safePage })
+    body: JSON.stringify({ contentId: content.id, currentPage: safePage, epubOffset })
   })
     .then(() => refreshProgress())
     .catch((error) => console.error(error));
@@ -4950,13 +6732,7 @@ async function openSeries(contentId: string): Promise<void> {
     return;
   }
 
-  state.activeSeriesId = content.id;
-  state.seriesTab = "chapters";
-  state.seriesReviewError = "";
-  state.reader = null;
-  renderShell();
-  await loadSeriesReviews(content.id);
-  renderShell();
+  await router.navigate({ kind: "title", libraryId: content.libraryId, contentId: content.id });
 }
 
 async function loadSeriesReviews(contentId: string): Promise<void> {
@@ -5247,6 +7023,7 @@ function getAvailableContents(): ContentItem[] {
 function getReadingNowContents(): ContentItem[] {
   const byId = new Map<string, ContentItem>();
   for (const content of [...state.readingNowContents, ...state.homeContents, ...state.contents]) {
+    if (content.pageTypes.includes("pdf")) continue;
     byId.set(content.id, content);
   }
   return [...byId.values()].sort((a, b) => a.title.localeCompare(b.title, "pt-BR", { numeric: true }));
@@ -5272,15 +7049,18 @@ function bindReaderDelegatedEvents(): void {
       return;
     }
 
-    // Click on the stage (not on overlay or pagination) toggles controls
+    // O PDF preserva cliques do documento para seleção de texto e anotações futuras.
+    // Somente leitores de imagem/quadrinhos mantêm o toggle genérico do palco.
     if (!target) {
-      const stage = (event.target as HTMLElement).closest("#reader-stage");
-      if (stage && !(event.target as HTMLElement).closest(".reader-overlay, .reader-pagination")) {
+      const elemento = event.target instanceof Element ? event.target : null;
+      const acaoClique = resolverCliquePalcoLeitor({
+        leitorPdf: state.reader.content.pageTypes.includes("pdf"),
+        dentroPalco: Boolean(elemento?.closest("#reader-stage")),
+        dentroInterface: Boolean(elemento?.closest(".reader-overlay, .reader-pagination, .reader-pdf-toolbar, .reader-pdf-side-toolbar, .reader-pdf-search, .pdf-outline-panel, .reader-epub-search, .pdf-form-panel"))
+      });
+      if (acaoClique === "alternar-controles") {
         state.reader.controlsVisible = !state.reader.controlsVisible;
-        renderShell();
-        if (state.reader.mode === "vertical-scroll") {
-          requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
-        }
+        renderReaderOverlay();
       }
       return;
     }
@@ -5292,7 +7072,50 @@ function bindReaderDelegatedEvents(): void {
 
     switch (action) {
       case "close":
-        state.reader = null;
+        closeReader();
+        break;
+
+      case "epub-appearance":
+        epubPanel = epubPanel === "appearance" ? "none" : "appearance";
+        state.reader.controlsVisible = true;
+        renderEpubOverlay();
+        break;
+
+      case "epub-appearance-close":
+        epubPanel = "none";
+        renderEpubOverlay();
+        document.querySelector<HTMLButtonElement>('[data-reader-action="epub-appearance"]')?.focus();
+        break;
+
+      case "epub-toc":
+        epubPanel = epubPanel === "toc" ? "none" : "toc";
+        state.reader.controlsVisible = true;
+        renderEpubOverlay();
+        break;
+
+      case "epub-goto":
+        epubPanel = "none";
+        state.reader.epubOffset = 0;
+        void setReaderPage(Number(target.dataset.epubPage ?? "0"), true);
+        break;
+
+      case "epub-appearance-reset": {
+        const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+        if (frame) state.reader.epubOffset = getEpubCurrentOffset(frame);
+        state.reader.epubFont = "serif";
+        state.reader.epubFontSize = 20;
+        state.reader.epubLineHeight = 1.7;
+        state.reader.epubMargin = 28;
+        persistEpubAppearance();
+        if (frame) applyEpubAppearance(frame, true);
+        renderEpubOverlay();
+        break;
+      }
+
+      case "epub-view":
+        state.reader.mode = state.reader.mode === "vertical-scroll" ? "horizontal" : "vertical-scroll";
+        persistEpubAppearance();
+        epubPanel = "none";
         renderShell();
         break;
 
@@ -5323,22 +7146,12 @@ function bindReaderDelegatedEvents(): void {
         setReaderZoom(100);
         break;
 
-      case "toggle-direction":
-        // In Kavita, this toggles between LTR and RTL reading direction.
-        // For now, cycle reader mode as a proxy.
-        state.reader.mode = getNextReaderMode(state.reader.mode);
-        state.reader.controlsVisible = true;
-        renderShell();
-        if (state.reader.mode === "vertical-scroll") {
-          requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
-        }
-        break;
-
       case "toggle-book-theme":
-        state.reader.bookTheme = state.reader.bookTheme === "dark" ? "light" : "dark";
+        state.reader.bookTheme = state.reader.bookTheme === "light" ? "sepia" : state.reader.bookTheme === "sepia" ? "dark" : "light";
+        persistEpubAppearance();
         state.reader.controlsVisible = true;
         renderShell();
-        if (state.reader.mode === "vertical-scroll") {
+        if (state.reader.mode === "vertical-scroll" && !state.reader.content.pageTypes.includes("epub")) {
           requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
         }
         break;
@@ -5347,16 +7160,36 @@ function bindReaderDelegatedEvents(): void {
         void toggleReaderFullscreen();
         break;
 
+      case "pdf-search":
+        abrirPesquisaPdf();
+        break;
+
+      case "pdf-outline":
+        alternarSumarioPdf();
+        break;
+
+      case "pdf-print":
+        imprimirPdfAberto();
+        break;
+
+      case "epub-search":
+        abrirPesquisaEpub();
+        break;
+
       case "bookmark":
         void handleReaderBookmark();
         break;
 
       case "page-prev":
-        void setReaderPage(state.reader.page - 1);
+        if (state.reader.content.pageTypes.includes("pdf")) navegarRelativoPdf(-1);
+        else if (state.reader.content.pageTypes.includes("epub")) advanceEpubPage(-1);
+        else void setReaderPage(state.reader.page - 1);
         break;
 
       case "page-next":
-        void setReaderPage(state.reader.page + 1);
+        if (state.reader.content.pageTypes.includes("pdf")) navegarRelativoPdf(1);
+        else if (state.reader.content.pageTypes.includes("epub")) advanceEpubPage(1);
+        else void setReaderPage(state.reader.page + 1);
         break;
 
       case "page-first":
@@ -5378,8 +7211,16 @@ function bindReaderDelegatedEvents(): void {
       case "goto-bookmark":
         {
           const page = Number(target.dataset.readerBookmarkPage ?? "0");
-          state.reader.mode = "horizontal";
-          void setReaderPage(page);
+          if (state.reader.content.pageTypes.includes("pdf")) navegarParaPaginaPdf(page + 1);
+          else void setReaderPage(page);
+        }
+        break;
+
+      case "retry-page":
+        if (pendingReaderPage !== null) {
+          const retryPage = pendingReaderPage;
+          // Failed entries are evicted, so retry creates one fresh controlled request.
+          void setReaderPage(retryPage, true);
         }
         break;
     }
@@ -5389,6 +7230,21 @@ function bindReaderDelegatedEvents(): void {
     const target = event.target as HTMLElement;
     if (!state.reader) return;
 
+    if (target.matches("[data-epub-setting]")) {
+      const control = target as HTMLInputElement | HTMLSelectElement;
+      if (control.dataset.epubSetting === "font") state.reader.epubFont = control.value === "sans" ? "sans" : "serif";
+      if (control.dataset.epubSetting === "size") state.reader.epubFontSize = Number(control.value);
+      if (control.dataset.epubSetting === "line") state.reader.epubLineHeight = Number(control.value);
+      if (control.dataset.epubSetting === "margin") state.reader.epubMargin = Number(control.value);
+      persistEpubAppearance();
+      const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+      if (frame) {
+        state.reader.epubOffset = getEpubCurrentOffset(frame);
+        applyEpubAppearance(frame, true);
+      }
+      return;
+    }
+
     if (target.matches("[data-reader-page-slider]")) {
       void setReaderPage(Number((target as HTMLInputElement).value));
       return;
@@ -5396,45 +7252,77 @@ function bindReaderDelegatedEvents(): void {
 
     if (target.matches("[data-reader-brightness]")) {
       state.reader.brightness = Number((target as HTMLInputElement).value);
+      if (state.reader.content.pageTypes.includes("pdf")) {
+        document.querySelector<HTMLElement>(".reader")?.style.setProperty("--reader-brightness", `${state.reader.brightness}%`);
+        return;
+      }
       state.reader.controlsVisible = true;
-      renderShell();
+      if (state.reader.content.pageTypes.includes("epub")) renderEpubOverlay();
+      else renderShell();
     }
   });
 }
 
+let readerBookmarkPending = false;
+
+function atualizarBotaoMarcadorPdf(pagina: number): void {
+  if (!state.reader) return;
+  const botao = document.querySelector<HTMLButtonElement>(".reader-pdf-bookmark");
+  if (!botao) return;
+  const marcado = isPageBookmarked(state.reader.content.id, pagina);
+  const icone = botao.querySelector<HTMLElement>(".icon");
+  if (icone) icone.innerHTML = renderIconeMarcadorPdf(marcado);
+  botao.classList.toggle("is-active", marcado);
+  botao.setAttribute("aria-pressed", String(marcado));
+  botao.disabled = readerBookmarkPending;
+  botao.setAttribute("aria-busy", String(readerBookmarkPending));
+  botao.title = `${marcado ? "Remover marcador" : "Marcar página"} (B)`;
+  botao.setAttribute("aria-label", marcado ? "Remover marcador" : "Marcar página");
+}
+
 async function handleReaderBookmark(): Promise<void> {
-  if (!state.reader || !state.user) return;
+  if (!state.reader || !state.user || readerBookmarkPending) return;
+  readerBookmarkPending = true;
 
   if (state.reader.mode === "vertical-scroll") {
     syncReaderPageFromScroll();
   }
 
   const { content, page } = state.reader;
+  const paginaMarcador = content.pageTypes.includes("pdf") ? Math.max(0, obterPaginaAtualPdf() - 1) : page;
   const contentId = content.id;
   const previousBookmarks = state.bookmarks;
-  const existingBookmark = previousBookmarks.find((b) => b.contentId === contentId && b.page === page);
+  const existingBookmark = previousBookmarks.find((b) => b.contentId === contentId && b.page === paginaMarcador);
 
   state.reader.controlsVisible = true;
   state.bookmarks = existingBookmark
-    ? previousBookmarks.filter((b) => !(b.contentId === contentId && b.page === page))
-    : [...previousBookmarks, { userId: state.user.id, contentId, page, createdAt: new Date().toISOString() }];
-  renderShell();
-  if (state.reader.mode === "vertical-scroll") {
+    ? previousBookmarks.filter((b) => !(b.contentId === contentId && b.page === paginaMarcador))
+    : [...previousBookmarks, { userId: state.user.id, contentId, page: paginaMarcador, createdAt: new Date().toISOString() }];
+  if (content.pageTypes.includes("pdf")) atualizarBotaoMarcadorPdf(Math.max(0, obterPaginaAtualPdf() - 1));
+  else if (content.pageTypes.includes("epub")) renderEpubOverlay();
+  else renderShell();
+  if (!content.pageTypes.includes("pdf") && !content.pageTypes.includes("epub") && state.reader.mode === "vertical-scroll") {
     requestAnimationFrame(() => scrollReaderToPage(page));
   }
 
   try {
-    await api<{ marked: boolean }>("/api/bookmarks", { method: "POST", body: JSON.stringify({ contentId, page }) });
+    await api<{ marked: boolean }>("/api/bookmarks", { method: "POST", body: JSON.stringify({ contentId, page: paginaMarcador }) });
     const { bookmarks } = await api<{ bookmarks: Bookmark[] }>("/api/bookmarks");
     state.bookmarks = bookmarks;
-    renderShell();
-    if (state.reader?.mode === "vertical-scroll") {
+    if (content.pageTypes.includes("pdf")) atualizarBotaoMarcadorPdf(Math.max(0, obterPaginaAtualPdf() - 1));
+    else if (content.pageTypes.includes("epub")) renderEpubOverlay();
+    else renderShell();
+    if (!content.pageTypes.includes("pdf") && !content.pageTypes.includes("epub") && state.reader?.mode === "vertical-scroll") {
       requestAnimationFrame(() => scrollReaderToPage(page));
     }
   } catch (error) {
     console.error(error);
     state.bookmarks = previousBookmarks;
-    renderShell();
+    if (content.pageTypes.includes("pdf")) atualizarBotaoMarcadorPdf(Math.max(0, obterPaginaAtualPdf() - 1));
+    else renderShell();
+  } finally {
+    readerBookmarkPending = false;
+    if (state.reader?.content.pageTypes.includes("pdf")) atualizarBotaoMarcadorPdf(Math.max(0, obterPaginaAtualPdf() - 1));
   }
 }
 
@@ -5442,126 +7330,237 @@ void boot();
 
 bindReaderDelegatedEvents();
 
-document.addEventListener("keydown", (event) => {
+window.addEventListener("pugotiread:pdf-zoom-change", (event) => {
+  if (!state.reader?.content.pageTypes.includes("pdf")) return;
+  state.reader.zoom = (event as CustomEvent<{ zoom: number }>).detail.zoom;
+  atualizarRotuloZoomPdf();
+});
+
+window.addEventListener("pugotiread:pdf-page-change", (event) => {
+  if (!state.reader?.content.pageTypes.includes("pdf")) return;
+  const page = Number((event as CustomEvent<{ page?: number }>).detail?.page);
+  if (!Number.isInteger(page) || page < 1) return;
+  state.reader.page = page - 1;
+  syncReaderRoute();
+  state.reader.content.pageCount = obterTotalPaginasPdf();
+  scheduleReaderProgressSave(state.reader.content, page - 1);
+  atualizarContadorAbsoluto();
+  atualizarBotaoMarcadorPdf(page - 1);
+});
+
+window.addEventListener("pugotiread:epub-search-open", () => {
+  if (state.reader?.content.pageTypes.includes("epub")) abrirPesquisaEpub();
+});
+
+window.addEventListener("keydown", (event) => {
+  const normalizedKey = event.key.toLowerCase();
+  const controlPressed = event.ctrlKey || event.metaKey;
+  const alvoProtegido = alvoEditavelPdf(event.target);
+
+  if (state.reader) {
+    const acao = resolverAtalhoLeitor(event, {
+      leitorAtivo: true,
+      leitorPdf: state.reader.content.pageTypes.includes("pdf"),
+      leitorEpub: state.reader.content.pageTypes.includes("epub"),
+      modoVerticalContinuo: state.reader.mode === "vertical-scroll",
+      direcaoLeitura: state.reader.direction,
+      alvoProtegido,
+      pesquisaPdfAberta: pesquisaPdfAberta(),
+      pesquisaEpubAberta: pesquisaEpubAberta(),
+      telaCheia: isReaderFullscreen(),
+      telaCheiaDisponivel: isReaderFullscreenAvailable(),
+      controlesVisiveis: state.reader.controlsVisible
+    });
+    if (!acao || !executarAtalhoLeitor(acao)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
+  if (alvoProtegido && event.key !== "Escape") return;
+  const searchShortcut = controlPressed
+    && !event.altKey
+    && (event.code === "KeyY" || normalizedKey === "y");
+  const vaultUnlockShortcut = controlPressed
+    && event.shiftKey
+    && !event.altKey
+    && (
+      event.code === "Period"
+      || normalizedKey === "."
+      || normalizedKey === ">"
+    );
+  const vaultLockShortcut = controlPressed
+    && event.shiftKey
+    && !event.altKey
+    && (
+      event.code === "Comma"
+      || normalizedKey === ","
+      || normalizedKey === "<"
+    );
+
+  if (searchShortcut) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+    toggleGlobalSearch();
+    return;
+  }
+
   if (state.user?.role === "admin" && event.ctrlKey && event.shiftKey && event.code === "KeyL") {
     event.preventDefault();
     toggleVaultMenuVisibility();
     return;
   }
 
-  if (state.user?.role === "admin" && event.ctrlKey && event.shiftKey && event.code === "Period") {
+  if (state.user?.role === "admin" && vaultUnlockShortcut) {
     event.preventDefault();
-    if (state.vaultUnlocked) {
-      void lockPersonalVault();
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+    openPersonalVaultFromShortcut();
+    return;
+  }
+
+  if (state.user?.role === "admin" && vaultLockShortcut) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+    void lockAndHidePersonalVaultFromShortcut();
+    return;
+  }
+
+  if (event.key === "Escape" && !state.reader) {
+    if (globalSearchOpen) {
+      event.preventDefault();
+      closeGlobalSearch();
+      return;
     }
-    return;
-  }
-
-  if (state.reader) {
-    switch (event.key) {
-      case "ArrowLeft":
-      case "ArrowUp":
-        event.preventDefault();
-        pageStep(-1);
-        break;
-      case "ArrowRight":
-      case "ArrowDown":
-        event.preventDefault();
-        if (state.reader.mode === "vertical-scroll") {
-          scrollReaderByViewport(1);
-        } else {
-          pageStep(1);
-        }
-        break;
-      case " ":
-        event.preventDefault();
-        if (state.reader.mode === "vertical-scroll") {
-          scrollReaderByViewport(1);
-        } else {
-          pageStep(1);
-        }
-        break;
-      case "Escape":
-        event.preventDefault();
-        state.reader = null;
-        renderShell();
-        break;
-      case "Home":
-        event.preventDefault();
-        void setReaderPage(0);
-        break;
-      case "End":
-        event.preventDefault();
-        void setReaderPage(state.reader.content.pageCount - 1);
-        break;
-      case "f":
-        event.preventDefault();
-        state.reader.fitting = getNextFittingMode(state.reader.fitting);
-        renderShell();
-        break;
-      case "+":
-      case "=":
-        event.preventDefault();
-        setReaderZoom(state.reader.zoom + 25);
-        break;
-      case "-":
-        event.preventDefault();
-        setReaderZoom(state.reader.zoom - 25);
-        break;
-      case "0":
-        event.preventDefault();
-        setReaderZoom(100);
-        break;
-      case "m":
-        event.preventDefault();
-        state.reader.mode = getNextReaderMode(state.reader.mode);
-        state.reader.controlsVisible = true;
-        renderShell();
-        if (state.reader.mode === "vertical-scroll") {
-          const p = state.reader.page;
-          requestAnimationFrame(() => scrollReaderToPage(p));
-        }
-        break;
-      case "c":
-        event.preventDefault();
-        state.reader.controlsVisible = !state.reader.controlsVisible;
-        renderShell();
-        break;
-      case "b":
-        event.preventDefault();
-        void handleReaderBookmark();
-        break;
-      case "[":
-        event.preventDefault();
-        void setReaderPage(getAdjacentChapterStartPage(state.reader.content, state.reader.page, -1));
-        break;
-      case "]":
-        event.preventDefault();
-        void setReaderPage(getAdjacentChapterStartPage(state.reader.content, state.reader.page, 1));
-        break;
+    const modalCloseButton = document.querySelector<HTMLButtonElement>(".modal-backdrop [aria-label=\"Fechar\"]");
+    if (modalCloseButton) {
+      event.preventDefault();
+      modalCloseButton.click();
+      return;
     }
-    return;
+
+    if (state.accountMenuOpen || state.statsMenuOpen || state.vaultMenuOpen || state.openLibraryMenuId || state.openSeriesMenuId || state.mobileNavOpen) {
+      event.preventDefault();
+      closeNavigationPanels();
+      closeMobileNavigation();
+      renderNavigationMenus();
+      return;
+    }
   }
 
-  if (!event.ctrlKey || event.key.toLowerCase() !== "y") {
-    return;
-  }
+}, { capture: true });
 
-  event.preventDefault();
-  document.querySelector<HTMLInputElement>("#search")?.focus();
-});
+function executarAtalhoLeitor(acao: AcaoAtalhoLeitor): boolean {
+  if (!state.reader) return false;
+  const leitorPdf = state.reader.content.pageTypes.includes("pdf");
+  const paginaAtual = leitorPdf ? obterPaginaAtualPdf() : state.reader.page + 1;
+  const totalPaginas = leitorPdf ? obterTotalPaginasPdf() : state.reader.content.pageCount;
+  switch (acao) {
+    case "pagina-anterior":
+      if (state.reader.content.pageTypes.includes("epub")) { advanceEpubPage(-1); return true; }
+      if (paginaAtual <= 1) return false;
+      if (leitorPdf) navegarRelativoPdf(-1); else pageStep(-1);
+      return true;
+    case "proxima-pagina":
+      if (state.reader.content.pageTypes.includes("epub")) { advanceEpubPage(1); return true; }
+      if (paginaAtual >= totalPaginas) return false;
+      if (leitorPdf) navegarRelativoPdf(1); else pageStep(1);
+      return true;
+    case "topo-pagina":
+      moverViewportDaPagina("start");
+      return true;
+    case "fim-pagina":
+      moverViewportDaPagina("end");
+      return true;
+    case "primeira-pagina":
+      if (paginaAtual <= 1) return false;
+      if (leitorPdf) navegarParaPaginaPdf(1); else void setReaderPage(0);
+      return true;
+    case "ultima-pagina":
+      if (paginaAtual >= totalPaginas) return false;
+      if (leitorPdf) navegarParaPaginaPdf(totalPaginas); else void setReaderPage(totalPaginas - 1);
+      return true;
+    case "abrir-pesquisa-pdf": abrirPesquisaPdf(); return true;
+    case "fechar-pesquisa-pdf": fecharPesquisaPdf(); return true;
+    case "abrir-pesquisa-epub": abrirPesquisaEpub(); return true;
+    case "fechar-pesquisa-epub": fecharPesquisaEpub(); return true;
+    case "alternar-tela-cheia": void toggleReaderFullscreen(); return true;
+    case "sair-tela-cheia": void exitReaderFullscreen(); return true;
+    case "fechar-controles":
+      state.reader.controlsVisible = false;
+      renderReaderOverlay();
+      return true;
+    case "fechar-leitor": closeReader(); return true;
+    case "alternar-modo":
+      state.reader.mode = state.reader.content.pageTypes.includes("epub")
+        ? (state.reader.mode === "vertical-scroll" ? "horizontal" : "vertical-scroll")
+        : getNextReaderMode(state.reader.mode);
+      persistEpubAppearance();
+      state.reader.controlsVisible = true;
+      renderShell();
+      if (state.reader?.mode === "vertical-scroll" && !state.reader.content.pageTypes.includes("epub")) requestAnimationFrame(() => scrollReaderToPage(state.reader?.page ?? 0));
+      return true;
+    case "alternar-controles":
+      state.reader.controlsVisible = !state.reader.controlsVisible;
+      renderReaderOverlay();
+      return true;
+    case "alternar-marcador": void handleReaderBookmark(); return true;
+    case "capitulo-anterior": void setReaderPage(getAdjacentChapterStartPage(state.reader.content, state.reader.page, -1)); return true;
+    case "proximo-capitulo": void setReaderPage(getAdjacentChapterStartPage(state.reader.content, state.reader.page, 1)); return true;
+    case "aumentar-zoom": setReaderZoom(state.reader.zoom + 25); return true;
+    case "diminuir-zoom": setReaderZoom(state.reader.zoom - 25); return true;
+    case "resetar-zoom": setReaderZoom(100); return true;
+  }
+  return false;
+}
 
 function pageStep(delta: -1 | 1): void {
   if (!state.reader) return;
   void setReaderPage(state.reader.page + delta);
 }
 
-function scrollReaderByViewport(direction: -1 | 1): void {
-  const stage = document.querySelector<HTMLElement>("#reader-stage");
-  if (!stage) return;
-  stage.scrollBy({ top: stage.clientHeight * direction, behavior: "smooth" });
+function moverViewportDaPagina(posicao: "start" | "end"): void {
+  if (!state.reader) return;
+
+  if (state.reader.content.pageTypes.includes("epub")) {
+    const frame = document.querySelector<HTMLIFrameElement>(".reader-epub");
+    const stage = document.getElementById("reader-stage");
+    if (state.reader.mode === "vertical-scroll") stage?.scrollTo({ top: posicao === "start" ? 0 : stage.scrollHeight, behavior: "smooth" });
+    else if (frame?.contentDocument) {
+      const scrolling = frame.contentDocument.scrollingElement ?? frame.contentDocument.documentElement;
+      const sign = state.reader.direction === "rtl" ? -1 : 1;
+      scrolling.scrollTo({ left: posicao === "start" ? 0 : sign * scrolling.scrollWidth, behavior: "smooth" });
+    }
+    return;
+  }
+
+  if (state.reader.content.pageTypes.includes("pdf")) {
+    const paginaPdf = document.querySelector<HTMLElement>(`[data-pdf-page="${obterPaginaAtualPdf()}"]`);
+    if (paginaPdf) {
+      paginaPdf.scrollIntoView({ block: posicao, behavior: "smooth" });
+      return;
+    }
+  }
+
+  const pagina = document.querySelector<HTMLElement>(`[data-reader-page-index="${state.reader.page}"]`);
+  if (pagina) {
+    pagina.scrollIntoView({ block: posicao, behavior: "smooth" });
+    return;
+  }
+
+  const palco = document.querySelector<HTMLElement>("#reader-stage");
+  palco?.scrollTo({ top: posicao === "start" ? 0 : palco.scrollHeight, behavior: "smooth" });
 }
 
-document.addEventListener("fullscreenchange", () => {
-  updateReaderFullscreenButton();
+for (const eventName of ["fullscreenchange", "webkitfullscreenchange"]) {
+  document.addEventListener(eventName, updateReaderFullscreenButton);
+}
+
+window.addEventListener("pugotiread:pdf-copy-saved", event => {
+  const content = (event as CustomEvent<ContentItem | null>).detail;
+  if (content && content.libraryId === state.activeLibraryId) {
+    state.contents = [...state.contents.filter(item => item.id !== content.id), content];
+  }
 });

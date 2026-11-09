@@ -38,6 +38,8 @@ export function renderStatsMenu(): string {
     ? `${state.libraries.length} bibliotecas públicas`
     : `${user?.allowedLibraryIds.length ?? 0} bibliotecas liberadas`;
   const sync = user?.role === "admin" ? state.syncStatus : null;
+  const vaultSyncRunning = sync?.state === "running" && sync.isVault;
+  const queuedDownloads = sync?.queuedDownloads ?? [];
   const syncLabel = sync?.state === "running"
     ? `${sync.percent}%`
     : sync?.state === "completed"
@@ -47,7 +49,7 @@ export function renderStatsMenu(): string {
         : "Parada";
 
   return `
-    <div class="stats-menu" role="dialog" aria-label="Estatísticas da sessão">
+    <div id="stats-menu" class="stats-menu" role="dialog" aria-label="Estatísticas da sessão">
       <div class="stats-menu-header">
         <strong>Estatísticas</strong>
         <span>${escapeHtml(user?.role === "admin" ? "Admin" : "Usuário")}</span>
@@ -66,6 +68,8 @@ export function renderStatsMenu(): string {
               <strong>${escapeHtml(syncLabel)}</strong>
               <span>Última sincronização</span>
               <strong title="${escapeHtml(sync.lastSyncTarget)}">${escapeHtml(formatDateTime(sync.lastSyncAt))}</strong>
+              <span>Downloads na fila</span>
+              <strong>${queuedDownloads.length ? `${queuedDownloads.length} aguardando` : "Nenhum"}</strong>
             `
             : ""
         }
@@ -79,20 +83,25 @@ export function renderStatsMenu(): string {
                 <span>${sync.percent}%</span>
               </div>
               <progress max="100" value="${sync.percent}">${sync.percent}%</progress>
-              <p>${escapeHtml(sync.message)}</p>
+              ${vaultSyncRunning ? "" : `<p>${escapeHtml(sync.message)}</p>`}
             </div>
           `
           : sync && sync.state !== "idle"
             ? `<p class="sync-stats-result ${sync.state === "error" ? "error" : ""}">${escapeHtml(sync.message)}</p>`
             : ""
       }
+      ${
+        queuedDownloads.length
+          ? `<div class="sync-stats"><div class="sync-stats-heading"><strong>Fila de downloads</strong><span>${queuedDownloads.length}</span></div><p>${escapeHtml(queuedDownloads.map((item) => item.target).join("\n"))}</p></div>`
+          : ""
+      }
     </div>
   `;
 }
 
-function renderAccountMenu(userName: string): string {
+export function renderAccountMenu(userName: string): string {
   return `
-    <div class="account-menu" role="menu">
+    <div id="account-menu" class="account-menu" role="menu">
       <div class="account-summary">
         ${renderAvatar(state.user, "avatar account-avatar")}
         <div>
@@ -110,7 +119,7 @@ export function renderTopbar(userName: string): string {
   return `
     <header class="topbar">
       <div class="topbar-brand">
-        <button class="icon-button" id="menu-button" type="button" title="Menu" aria-expanded="${state.mobileNavOpen}">${renderIcon("menu")}</button>
+        <button class="icon-button" id="menu-button" type="button" title="Menu" aria-expanded="${state.mobileNavOpen}" aria-controls="mobile-sidebar">${renderIcon("menu")}</button>
         <button class="topbar-home" id="home-button" type="button">
           <span class="brand-badge" aria-hidden="true">${renderSidebarIcon("book", "Pugotiread")}</span>
           <span>Pugotiread</span>
@@ -121,19 +130,19 @@ export function renderTopbar(userName: string): string {
           <button class="icon-button" id="search-button" type="button" title="Pesquisar" aria-label="Pesquisar">${renderIcon("search")}</button>
           <label class="search-shell">
             <span class="visually-hidden">Pesquisar</span>
-            <input class="search" id="search" placeholder="Search (Procurar)" value="" />
+            <input class="search" id="search" placeholder="Pesquisar" value="" autocomplete="off" aria-label="Pesquisar na biblioteca" />
             <span class="search-ghost" id="search-ghost" aria-hidden="true"></span>
             <kbd>Ctrl+Y</kbd>
           </label>
         </div>
         <div class="stats-menu-shell">
-          <button class="icon-button" id="stats-button" type="button" title="Estatísticas" aria-expanded="${state.statsMenuOpen}">${renderIcon("stats")}</button>
+          <button class="icon-button" id="stats-button" type="button" title="Estatísticas" aria-expanded="${state.statsMenuOpen}" aria-controls="stats-menu">${renderIcon("stats")}</button>
           ${state.statsMenuOpen ? renderStatsMenu() : ""}
         </div>
         <button class="icon-button" id="theme-toggle" type="button" title="${state.darkMode ? "Modo claro" : "Modo escuro"}">${renderIcon(state.darkMode ? "sun" : "moon")}</button>
         <button class="icon-button" id="settings-button" type="button" title="Configurações">${renderIcon("settings")}</button>
         <div class="account-menu-shell">
-          <button class="avatar-button" id="account-button" type="button" aria-expanded="${state.accountMenuOpen}" title="${escapeHtml(userName)}">
+          <button class="avatar-button" id="account-button" type="button" aria-expanded="${state.accountMenuOpen}" aria-controls="account-menu" title="${escapeHtml(userName)}">
             ${renderAvatar(state.user)}
             <span class="avatar-caret" aria-hidden="true">${renderIcon("caret")}</span>
           </button>

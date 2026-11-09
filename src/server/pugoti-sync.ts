@@ -6,11 +6,13 @@ import { config } from "./config.js";
 import { store } from "./store.js";
 import type { ContentItem, Library } from "../shared/types.js";
 
-const syncableLibraryKinds = new Set(["manga", "manhwa", "comic", "lightNovel", "other"]);
+const syncableLibraryKinds = new Set(["manga", "manhwa", "comic", "lightNovel"]);
 const outputLimit = 4 * 1024 * 1024;
+const vaultStatusMessage = "Atualizando o cofre";
 
 export type SyncStatus = {
   state: "idle" | "running" | "completed" | "error";
+  isVault: boolean;
   target: string;
   libraryId: string | null;
   contentId: string | null;
@@ -31,13 +33,26 @@ export type SyncStatus = {
   lastSyncMessage: string;
   lastSyncSource: "manual" | "automatic" | null;
   output: string;
+  queuedDownloads: Array<{ target: string; queuedAt: string }>;
 };
 
 let syncStatus: SyncStatus = createIdleStatus();
 
+type QueuedDownload = {
+  library: Library;
+  directDownload: { kind: "manga" | "manhwa"; url: string };
+  onSuccess: () => Promise<void>;
+  source: "manual" | "automatic";
+  queuedAt: string;
+};
+
+const downloadQueue: QueuedDownload[] = [];
+let queuedDownloadStartScheduled = false;
+
 function createIdleStatus(): SyncStatus {
   return {
     state: "idle",
+    isVault: false,
     target: "",
     libraryId: null,
     contentId: null,
@@ -57,7 +72,8 @@ function createIdleStatus(): SyncStatus {
     lastSyncState: null,
     lastSyncMessage: "",
     lastSyncSource: null,
-    output: ""
+    output: "",
+    queuedDownloads: []
   };
 }
 
@@ -104,7 +120,9 @@ function updateProgress(line: string): void {
   if (workMatch) {
     syncStatus.currentWork = Number(workMatch[1]);
     syncStatus.totalWorks = Number(workMatch[2]);
-    syncStatus.message = `Sincronizando obra ${syncStatus.currentWork} de ${syncStatus.totalWorks}.`;
+    syncStatus.message = syncStatus.isVault
+      ? vaultStatusMessage
+      : `Sincronizando obra ${syncStatus.currentWork} de ${syncStatus.totalWorks}.`;
     return;
   }
 
@@ -119,7 +137,7 @@ function updateProgress(line: string): void {
   syncStatus.totalPages = Number(progressMatch[2]);
   syncStatus.currentChapter = Number(progressMatch[3]);
   syncStatus.totalChapters = Number(progressMatch[4]);
-  syncStatus.currentLabel = progressMatch[5];
+  syncStatus.currentLabel = syncStatus.isVault ? "" : progressMatch[5];
 
   const chapterFraction = syncStatus.totalChapters > 0
     ? Math.max(0, syncStatus.currentChapter - 1) / syncStatus.totalChapters
@@ -129,7 +147,9 @@ function updateProgress(line: string): void {
   const currentWork = Math.max(syncStatus.currentWork, 1);
   const overallFraction = ((currentWork - 1) + chapterFraction) / totalWorks;
   syncStatus.percent = Math.min(99, Math.max(syncStatus.percent, Math.round(overallFraction * 100)));
-  syncStatus.message = `${syncStatus.currentLabel}: página ${syncStatus.currentPage} de ${syncStatus.totalPages}.`;
+  syncStatus.message = syncStatus.isVault
+    ? vaultStatusMessage
+    : `${syncStatus.currentLabel}: página ${syncStatus.currentPage} de ${syncStatus.totalPages}.`;
 }
 
 function consumeOutput(value: string, remainder: { value: string }): void {
@@ -142,51 +162,105 @@ function consumeOutput(value: string, remainder: { value: string }): void {
   updateProgress(remainder.value);
 }
 
+export function canDownloadToLibrary(library: Library): boolean {
+  return syncableLibraryKinds.has(library.kind);
+}
+
 export function canSyncLibrary(library: Library): boolean {
-  return !library.isPersonal && syncableLibraryKinds.has(library.kind);
+  return !library.isPersonal && canDownloadToLibrary(library);
 }
 
 export function getPugotiSyncStatus(): SyncStatus {
   const latest = store.getLatestSyncRun();
   return {
     ...syncStatus,
+    output: syncStatus.isVault ? "" : syncStatus.output,
     lastSyncAt: latest?.finishedAt ?? null,
     lastSyncTarget: latest?.target ?? "",
     lastSyncState: latest?.state === "completed" || latest?.state === "error" ? latest.state : null,
     lastSyncMessage: latest?.message ?? "",
-    lastSyncSource: latest?.source ?? null
+    lastSyncSource: latest?.source ?? null,
+    queuedDownloads: downloadQueue.map((item) => ({
+      target: item.library.isPersonal
+        ? vaultStatusMessage
+        : `Download ${item.directDownload.kind}: ${item.directDownload.url}`,
+      queuedAt: item.queuedAt
+    }))
   };
+}
+
+export function isPugotiSyncBusy(): boolean {
+  return syncStatus.state === "running" || queuedDownloadStartScheduled || downloadQueue.length > 0;
+}
+
+function scheduleQueuedDownload(): void {
+  if (syncStatus.state === "running" || queuedDownloadStartScheduled || downloadQueue.length === 0) {
+    return;
+  }
+
+  queuedDownloadStartScheduled = true;
+  queueMicrotask(() => {
+    queuedDownloadStartScheduled = false;
+    if (syncStatus.state === "running") {
+      return;
+    }
+
+    const next = downloadQueue.shift();
+    if (!next) {
+      return;
+    }
+
+    void startPugotiSync(next.library, null, next.onSuccess, next.source, next.directDownload)
+      .catch((error) => {
+        console.error("[DOWNLOAD] Não foi possível iniciar item da fila:", error);
+        scheduleQueuedDownload();
+      });
+  });
 }
 
 export async function startPugotiSync(
   library: Library,
   content: ContentItem | null,
   onSuccess: () => Promise<void>,
-  source: "manual" | "automatic" = "manual"
+  source: "manual" | "automatic" = "manual",
+  directDownload?: { kind: "manga" | "manhwa"; url: string }
 ): Promise<SyncStatus> {
-  if (!canSyncLibrary(library)) {
+  const isDirectDownloadDestination = Boolean(directDownload) && canDownloadToLibrary(library);
+  if (!canSyncLibrary(library) && !isDirectDownloadDestination) {
     throw new Error("Este tipo de biblioteca não participa da sincronização.");
   }
   if (syncStatus.state === "running") {
+    if (directDownload) {
+      downloadQueue.push({ library, directDownload, onSuccess, source, queuedAt: new Date().toISOString() });
+      return getPugotiSyncStatus();
+    }
     throw new Error("Já existe uma sincronização em andamento.");
   }
 
   const targetPath = content ? await resolveContentPath(library, content) : "all";
-  const args = content
-    ? [targetPath, "--sync", "--output", library.path]
-    : ["--all", "--sync", "--output", library.path];
-  const target = content?.title ?? `Todas as obras de ${library.name}`;
+  const args = directDownload
+    ? [directDownload.kind, directDownload.url, "--output", library.path]
+    : content
+      ? [targetPath, "--sync", "--output", library.path]
+      : ["--all", "--sync", "--output", library.path];
+  const isVault = Boolean(library.isPersonal);
+  const target = isVault
+    ? vaultStatusMessage
+    : directDownload
+      ? `Download ${directDownload.kind}: ${directDownload.url}`
+    : content?.title ?? `Todas as obras de ${library.name}`;
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   syncStatus = {
     ...createIdleStatus(),
     state: "running",
+    isVault,
     target,
     libraryId: library.id,
     contentId: content?.id ?? null,
     currentWork: content ? 1 : 0,
     totalWorks: content ? 1 : 0,
-    message: `Preparando ${target}...`,
+    message: isVault ? vaultStatusMessage : `Preparando ${target}...`,
     startedAt
   };
   store.createSyncRun({
@@ -214,12 +288,14 @@ export async function startPugotiSync(
       ]
     : args;
   if (config.pugotiIoLockPath) {
-    syncStatus.message = `${target}: aguardando a fila de operações do disco...`;
+    syncStatus.message = isVault
+      ? vaultStatusMessage
+      : `${target}: aguardando a fila de operações do disco...`;
   }
 
   const child = spawn(command, commandArgs, {
     cwd: library.path,
-    env: { ...process.env, PUGOTI_PROGRESS: "1" },
+    env: { ...process.env, PUGOTI_PROGRESS: "1", PYTHONUNBUFFERED: "1" },
     stdio: ["ignore", "pipe", "pipe"]
   });
   const stdoutRemainder = { value: "" };
@@ -243,9 +319,10 @@ export async function startPugotiSync(
     settled = true;
     clearTimeout(timeout);
     syncStatus.state = "error";
-    syncStatus.message = message;
+    syncStatus.message = syncStatus.isVault ? "Falha ao atualizar o cofre." : message;
     syncStatus.finishedAt = new Date().toISOString();
     store.finishSyncRun(runId, "error", syncStatus.message, syncStatus.output, syncStatus.finishedAt);
+    scheduleQueuedDownload();
   };
 
   child.on("error", (error) => {
@@ -261,21 +338,30 @@ export async function startPugotiSync(
     updateProgress(stdoutRemainder.value);
     updateProgress(stderrRemainder.value);
     if (code !== 0) {
-      const detail = syncStatus.output.trim().split(/\r?\n/).filter(Boolean).at(-1);
-      fail(detail || `O sincronizador terminou com código ${code ?? signal ?? "desconhecido"}.`);
+      const lines = syncStatus.output.trim().split(/[\r\n]+/).filter(Boolean);
+      const reversedLines = [...lines].reverse();
+      const detail = reversedLines.find((line) => line.startsWith("Falhas no sync:"))
+        ?? reversedLines.find((line) => line.startsWith("Erro:"))
+        ?? lines.at(-1);
+      const failure = detail || `O sincronizador terminou com código ${code ?? signal ?? "desconhecido"}.`;
+      // A failing work may follow successful downloads; publish those pages too.
+      void onSuccess()
+        .then(() => fail(failure))
+        .catch((error) => fail(`${failure} Também houve falha ao atualizar o índice: ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
 
     syncStatus.percent = 99;
-    syncStatus.message = "Atualizando a biblioteca...";
+    syncStatus.message = isVault ? vaultStatusMessage : "Atualizando a biblioteca...";
     void onSuccess()
       .then(() => {
         settled = true;
         syncStatus.state = "completed";
         syncStatus.percent = 100;
-        syncStatus.message = `${target}: sincronização concluída.`;
+        syncStatus.message = isVault ? "Cofre atualizado." : `${target}: sincronização concluída.`;
         syncStatus.finishedAt = new Date().toISOString();
         store.finishSyncRun(runId, "completed", syncStatus.message, syncStatus.output, syncStatus.finishedAt);
+        scheduleQueuedDownload();
       })
       .catch((error) => {
         fail(error instanceof Error ? error.message : "Falha ao atualizar a biblioteca.");

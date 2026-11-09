@@ -94,5 +94,6 @@ export const config = {
   pugotiIoLockPath: process.env.PUGOTI_IO_LOCK_PATH?.trim() ?? "",
   pugotiIoLockWaitSeconds: readPositiveNumber(process.env.PUGOTI_IO_LOCK_WAIT_SECONDS, 6 * 60 * 60),
   pugotiAutoSyncEnabled: readBoolean(process.env.PUGOTI_AUTO_SYNC_ENABLED, true),
-  pugotiSyncIntervalMs: readPositiveNumber(process.env.PUGOTI_SYNC_INTERVAL_MS, 2 * 60 * 60 * 1000)
+  // Horas entre sincronizações automáticas; o antigo PUGOTI_SYNC_INTERVAL_MS (2 h) deixou de ser lido.
+  pugotiSyncIntervalMs: readPositiveNumber(process.env.PUGOTI_SYNC_INTERVAL_HOURS, 6) * 60 * 60 * 1000
 };

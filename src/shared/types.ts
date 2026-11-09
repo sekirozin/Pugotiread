@@ -1,10 +1,11 @@
-export type UserRole = "admin" | "user";
+export type UserRole = "admin" | "superuser" | "user";
 
 export type LibraryKind = "manga" | "manhwa" | "book" | "comic" | "lightNovel" | "other";
 
 export type PageMediaType = "image" | "pdf" | "epub";
 export type ReaderMode = "horizontal" | "paged-vertical" | "vertical-scroll";
 export type ReaderFittingMode = "height" | "width" | "original";
+export type ReaderDirection = "ltr" | "rtl";
 
 export interface User {
   id: string;
@@ -71,24 +72,66 @@ export interface ContentItem {
   title: string;
   description: string | null;
   authors: string[];
+  artists?: string[];
   releaseDate: string | null;
   rating: string | null;
+  publicationStatus?: string | null;
+  /** Nota externa do Google Books, quando disponível para livros. */
+  externalRating?: string | null;
   genres: string[];
   pageCount: number;
   chapterCount: number;
   chapters: ChapterInfo[];
   coverUrl: string | null;
   pageTypes: PageMediaType[];
+  system?: string | null;
+  formOwnerUserId?: string | null;
+  formVisibility?: "private" | "shared" | "public";
+  rpgRole?: "module" | "template";
+}
+
+export interface PdfFormCopyAccess {
+  moduleId?: string | null;
+  contentId: string;
+  title?: string;
+  sourceId: string;
+  ownerUserId: string;
+  ownerDisplayName: string;
+  visibility: "private" | "shared" | "public";
+  sharedWithUserIds: string[];
+  system: string;
+}
+
+export interface RpgDocument {
+  id: string;
+  contentId: string;
+  role: "module" | "template";
+}
+
+export interface RpgDetails {
+  document: RpgDocument | null;
+  documents: Array<RpgDocument & { title: string }>;
+  templateIds: string[];
+  templates: ContentItem[];
+  modules: ContentItem[];
+  mySheets: ContentItem[];
+  sharedSheets: ContentItem[];
+  copy: PdfFormCopyAccess | null;
+  canManage: boolean;
+  users: Array<{ id: string; displayName: string }>;
 }
 
 export interface ReadingProgress {
   userId: string;
   contentId: string;
   currentPage: number;
+  /** Fraction of the text read inside an EPUB spine document (0..1). */
+  epubOffset?: number;
   updatedAt: string;
 }
 
 export interface Bookmark {
+  name?: string;
   userId: string;
   contentId: string;
   page: number;
@@ -157,10 +200,12 @@ export interface PublicContentReview {
 }
 
 export interface ServerSettings {
+  startupLibraries?: Record<string, string>;
   vaultTimeoutMinutes: number;
   readingDefaults: Record<LibraryKind, {
     mode: ReaderMode;
     fitting: ReaderFittingMode;
+    direction: ReaderDirection;
     controlsVisible: boolean;
   }>;
 }

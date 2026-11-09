@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { config } from "./config.js";
@@ -7,6 +8,7 @@ const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
+  [".mjs", "text/javascript; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -27,10 +29,13 @@ const contentTypes = new Map([
   [".woff2", "font/woff2"]
 ]);
 
-function getStaticCacheControl(filePath: string): string {
+function getStaticCacheControl(filePath: string, hasVersion: boolean): string {
   const extension = path.extname(filePath).toLowerCase();
-  if (extension === ".html" || extension === ".js" || extension === ".css") {
-    return "no-cache, no-store, must-revalidate";
+  if ((extension === ".js" || extension === ".css") && hasVersion) {
+    return "public, max-age=31536000, immutable";
+  }
+  if (extension === ".html") {
+    return "no-cache, private, must-revalidate";
   }
   return "private, max-age=3600";
 }
@@ -54,44 +59,131 @@ export function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
-const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
-
 function getFileCacheControl(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  if (imageExtensions.has(ext)) {
-    return "public, max-age=86400, immutable";
-  }
   return "private, max-age=3600";
 }
 
-export async function sendFile(res: ServerResponse, filePath: string, cacheControl = getFileCacheControl(filePath)): Promise<void> {
-  const file = await fs.readFile(filePath);
+function makeEtag(size: number, mtimeMs: number): string {
+  return `"${size.toString(16)}-${Math.trunc(mtimeMs).toString(16)}"`;
+}
+
+function isNotModified(req: IncomingMessage, etag: string, mtimeMs: number): boolean {
+  const ifNoneMatch = req.headers["if-none-match"];
+  if (ifNoneMatch) {
+    return ifNoneMatch.split(",").map((value) => value.trim()).includes(etag) || ifNoneMatch.trim() === "*";
+  }
+  const ifModifiedSince = req.headers["if-modified-since"];
+  const since = typeof ifModifiedSince === "string" ? Date.parse(ifModifiedSince) : Number.NaN;
+  return Number.isFinite(since) && Math.trunc(mtimeMs / 1000) <= Math.trunc(since / 1000);
+}
+
+export function parseSingleRange(value: string | undefined, size: number): { start: number; end: number } | null | "invalid" {
+  if (!value) return null;
+  if (!value.startsWith("bytes=") || value.includes(",") || size <= 0) return "invalid";
+  const match = value.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (!match[1] && !match[2])) return "invalid";
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return "invalid";
+    return { start: Math.max(size - suffixLength, 0), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) return "invalid";
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+export async function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, cacheControl = getFileCacheControl(filePath)): Promise<void> {
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) throw new Error("O caminho solicitado não é um arquivo.");
   const ext = path.extname(filePath).toLowerCase();
-  res.writeHead(200, {
+  const etag = makeEtag(stat.size, stat.mtimeMs);
+  const commonHeaders = {
     "Content-Type": contentTypes.get(ext) ?? "application/octet-stream",
-    "Cache-Control": cacheControl
+    "Cache-Control": cacheControl,
+    "Accept-Ranges": "bytes",
+    "ETag": etag,
+    "Last-Modified": stat.mtime.toUTCString()
+  };
+
+  if (isNotModified(req, etag, stat.mtimeMs)) {
+    res.writeHead(304, commonHeaders);
+    res.end();
+    return;
+  }
+
+  const ifRange = req.headers["if-range"];
+  const ifRangeDate = typeof ifRange === "string" ? Date.parse(ifRange) : Number.NaN;
+  const rangeAllowed = !ifRange || ifRange === etag || (Number.isFinite(ifRangeDate) && stat.mtimeMs <= ifRangeDate + 999);
+  const range = rangeAllowed ? parseSingleRange(req.headers.range, stat.size) : null;
+  if (range === "invalid") {
+    res.writeHead(416, { ...commonHeaders, "Content-Range": `bytes */${stat.size}`, "Content-Length": "0" });
+    res.end();
+    return;
+  }
+
+  const start = range?.start ?? 0;
+  const end = range?.end ?? Math.max(stat.size - 1, 0);
+  const contentLength = range ? end - start + 1 : stat.size;
+  res.writeHead(range ? 206 : 200, {
+    ...commonHeaders,
+    "Content-Length": String(contentLength),
+    ...(range ? { "Content-Range": `bytes ${start}-${end}/${stat.size}` } : {})
   });
-  res.end(file);
+  if (req.method === "HEAD" || stat.size === 0) {
+    res.end();
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(filePath, range ? { start, end } : undefined);
+    const abort = () => {
+      stream.destroy();
+      resolve();
+    };
+    req.once("aborted", abort);
+    res.once("close", abort);
+    stream.once("error", (error) => {
+      if (res.headersSent) {
+        res.destroy(error);
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+    res.once("finish", resolve);
+    stream.pipe(res);
+  });
 }
 
 export function getContentType(filePath: string): string {
   return contentTypes.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream";
 }
 
-export function sendHtml(res: ServerResponse, html: string): void {
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "private, max-age=3600"
-  });
-  res.end(html);
+export function isPathInside(basePath: string, candidatePath: string): boolean {
+  const relativePath = path.relative(path.resolve(basePath), path.resolve(candidatePath));
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
-export function sendBuffer(res: ServerResponse, filePath: string, file: Buffer): void {
+export function sendHtml(req: IncomingMessage, res: ServerResponse, html: string): void {
+  const body = Buffer.from(html);
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private, max-age=3600",
+    "Content-Length": String(body.length)
+  });
+  res.end(req.method === "HEAD" ? undefined : body);
+}
+
+export function sendBuffer(req: IncomingMessage, res: ServerResponse, filePath: string, file: Buffer): void {
   res.writeHead(200, {
     "Content-Type": getContentType(filePath),
-    "Cache-Control": getFileCacheControl(filePath)
+    "Cache-Control": getFileCacheControl(filePath),
+    "Content-Length": String(file.length)
   });
-  res.end(file);
+  res.end(req.method === "HEAD" ? undefined : file);
 }
 
 export async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -99,15 +191,13 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse): Pr
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
   if (requestedPath.startsWith("/icons/")) {
     const iconPath = path.resolve(config.iconsDir, `.${decodeURIComponent(requestedPath.slice("/icons".length))}`);
-    if (!iconPath.startsWith(path.resolve(config.iconsDir))) {
+    if (!isPathInside(config.iconsDir, iconPath)) {
       sendJson(res, 403, { error: "Acesso negado." });
       return;
     }
 
     try {
-      const file = await fs.readFile(iconPath);
-      res.writeHead(200, { "Content-Type": contentTypes.get(path.extname(iconPath).toLowerCase()) ?? "application/octet-stream" });
-      res.end(file);
+      await sendFile(req, res, iconPath, "public, max-age=86400");
     } catch {
       sendJson(res, 404, { error: "Ícone não encontrado." });
     }
@@ -115,37 +205,28 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   const servesWebModule = requestedPath.startsWith("/UI/Web/");
+  const servesSharedModule = requestedPath.startsWith('/shared/');
   const baseDir = requestedPath === "/app.js"
     ? config.clientDir
     : servesWebModule
       ? path.resolve(config.clientDir, "../UI/Web")
-      : config.publicDir;
-  const staticPath = servesWebModule ? requestedPath.slice("/UI/Web".length) : requestedPath;
+      : servesSharedModule ? path.resolve(config.clientDir,'../shared') : config.publicDir;
+  const staticPath = servesWebModule ? requestedPath.slice("/UI/Web".length) : servesSharedModule ? requestedPath.slice('/shared'.length) : requestedPath;
   const filePath = path.resolve(baseDir, `.${staticPath}`);
 
-  if (!filePath.startsWith(path.resolve(baseDir))) {
+  if (!isPathInside(baseDir, filePath)) {
     sendJson(res, 403, { error: "Acesso negado." });
     return;
   }
 
   try {
-    const file = await fs.readFile(filePath);
-    res.writeHead(200, {
-      "Content-Type": contentTypes.get(path.extname(filePath)) ?? "application/octet-stream",
-      "Cache-Control": getStaticCacheControl(filePath)
-    });
-    res.end(file);
+    await sendFile(req, res, filePath, getStaticCacheControl(filePath, url.searchParams.has("v")));
   } catch {
     if (path.extname(requestedPath)) {
       sendJson(res, 404, { error: "Arquivo estático não encontrado." });
       return;
     }
 
-    const fallback = await fs.readFile(path.join(config.publicDir, "index.html"));
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-cache, no-store, must-revalidate"
-    });
-    res.end(fallback);
+    await sendFile(req, res, path.join(config.publicDir, "index.html"), "no-cache, private, must-revalidate");
   }
 }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Imprimir PDF · Pugotiread</title>
+  <link rel="stylesheet" href="/pdf-print.css?v=20260925">
+  <script type="module" src="/pdf-print.js?v=20260925"></script>
+</head>
+<body>
+  <main class="controls">
+    <h1>Imprimir PDF</h1>
+    <p id="title"></p>
+    <form id="options">
+      <label for="pages">Páginas</label>
+      <input id="pages" placeholder="Todas — ou, por exemplo, 1-4, 8" disabled>
+      <p class="hint">Deixe em branco para imprimir o documento inteiro. Para fichas, selecione apenas as páginas desejadas.</p>
+      <button id="prepare" disabled>Preparar impressão</button>
+    </form>
+    <button id="print" hidden>Imprimir</button>
+    <p id="status" role="status" aria-live="polite">Carregando PDF…</p>
+    <a id="original" hidden target="_blank" rel="noopener">Abrir PDF original</a>
+  </main>
+  <div id="sheets"></div>
+</body>
+</html>

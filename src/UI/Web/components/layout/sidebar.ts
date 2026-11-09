@@ -15,7 +15,7 @@ function escapeHtml(value: string): string {
 function renderNavButton(view: AppState["activeView"], icon: string, label: string): string {
   const active = state.activeView === view ? " active" : "";
   return `
-    <button class="nav-button${active}" data-nav-view="${view}" title="${escapeHtml(label)}">
+    <button class="nav-button${active}" data-nav-view="${view}" type="button" title="${escapeHtml(label)}">
       <span class="nav-icon" aria-hidden="true">${icon}</span>
       <span class="nav-label">${label}</span>
     </button>
@@ -25,42 +25,46 @@ function renderNavButton(view: AppState["activeView"], icon: string, label: stri
 function renderLibraryButton(library: Library): string {
   const active = state.activeView === "library" && library.id === state.activeLibraryId ? " active" : "";
   return `
-    <button class="nav-button library-button${active}" data-library-id="${library.id}" title="${escapeHtml(library.name)}">
-      <span class="nav-icon" aria-hidden="true">${renderSidebarIcon("book", library.name)}</span>
-      <span class="nav-label">${escapeHtml(library.name)}</span>
+    <div class="library-nav-item">
+      <button class="nav-button library-button${active}" data-library-id="${library.id}" type="button" aria-label="Abrir biblioteca ${escapeHtml(library.name)}">
+        <span class="nav-icon" aria-hidden="true">${renderSidebarIcon("book", library.name)}</span>
+        <span class="nav-label">${escapeHtml(library.name)}</span>
+      </button>
       ${
         state.user?.role === "admin"
           ? `
-            <span class="nav-more" data-library-menu-id="${library.id}" role="button" tabindex="0" title="Opções da biblioteca">${renderIcon("moreVertical")}</span>
+            <button class="nav-more library-nav-menu-button" data-library-menu-id="${library.id}" type="button" aria-label="Opções da biblioteca ${escapeHtml(library.name)}" aria-expanded="${state.openLibraryMenuId === library.id}">${renderIcon("moreVertical")}</button>
             ${state.openLibraryMenuId === library.id ? renderLibraryContextMenu(library) : ""}
           `
           : ""
       }
-    </button>
+    </div>
   `;
 }
 
-function renderVaultNavButton(): string {
+export function renderVaultNavButton(): string {
   const active = state.activeView === "vault" ? " active" : "";
   return `
-    <button class="nav-button library-button${active}" data-nav-view="vault" title="Cofre pessoal">
-      <span class="nav-icon" aria-hidden="true">${renderSidebarIcon(state.vaultUnlocked ? "vaultOpen" : "vaultClosed", "Cofre pessoal")}</span>
-      <span class="nav-label">Cofre pessoal</span>
-      <span class="nav-more vault-nav-more" data-vault-menu role="button" tabindex="0" title="Opções do cofre">${renderIcon("moreVertical")}</span>
+    <div class="vault-nav-item">
+      <button class="nav-button library-button${active}" data-nav-view="vault" type="button" title="Cofre pessoal">
+        <span class="nav-icon" aria-hidden="true">${renderSidebarIcon(state.vaultUnlocked ? "vaultOpen" : "vaultClosed", "Cofre pessoal")}</span>
+        <span class="nav-label">Cofre pessoal</span>
+      </button>
+      <button class="nav-more vault-nav-more" data-vault-menu type="button" aria-label="Opções do cofre" aria-expanded="${state.vaultMenuOpen}">${renderIcon("moreVertical")}</button>
       ${state.vaultMenuOpen ? renderVaultContextMenu() : ""}
-    </button>
+    </div>
   `;
 }
 
-function renderVaultContextMenu(): string {
+export function renderVaultContextMenu(): string {
   return `
     <span class="library-context-menu" role="menu" aria-label="Opções do cofre pessoal">
       ${
         state.vaultUnlocked
-          ? `<span class="library-menu-item" id="lock-vault-sidebar-button" role="menuitem">Bloquear cofre <span class="menu-shortcut">Ctrl+Shift+.</span></span>`
-          : `<span class="library-menu-item disabled" role="menuitem">Cofre bloqueado</span>`
+          ? `<button class="library-menu-item" id="lock-vault-sidebar-button" type="button" role="menuitem">Bloquear cofre</button>`
+          : `<button class="library-menu-item disabled" type="button" role="menuitem" disabled>Cofre bloqueado</button>`
       }
-      <span class="library-menu-item" id="hide-vault-sidebar-button" role="menuitem">Esconder <span class="menu-shortcut">Ctrl+Shift+L</span></span>
+      <button class="library-menu-item" id="hide-vault-sidebar-button" type="button" role="menuitem">Esconder <span class="menu-shortcut">Ctrl+Shift+L</span></button>
     </span>
   `;
 }
@@ -68,8 +72,8 @@ function renderVaultContextMenu(): string {
 export function renderLibraryContextMenu(library: Library): string {
   return `
     <span class="library-context-menu" role="menu" aria-label="Opções de ${escapeHtml(library.name)}">
-      <span class="library-menu-item" data-scan-library-id="${library.id}" role="menuitem">Escanear biblioteca</span>
-      <span class="library-menu-item" data-edit-library="${library.id}" role="menuitem">Editar</span>
+      <button class="library-menu-item" data-scan-library-id="${library.id}" type="button" role="menuitem">Escanear biblioteca</button>
+      <button class="library-menu-item" data-edit-library="${library.id}" type="button" role="menuitem">Editar</button>
     </span>
   `;
 }
@@ -86,7 +90,7 @@ function renderServerSectionButton(section: AppState["serverSection"], label: st
 
 function renderMainSidebar(): string {
   return `
-    <nav class="side-nav" aria-label="Menu principal">
+    <nav id="mobile-sidebar" class="side-nav" aria-label="Menu principal">
       ${renderNavButton("home", renderSidebarIcon("home", "Início"), "Início")}
       ${renderNavButton("want", renderSidebarIcon("want", "Lendo agora"), "Lendo agora")}
       ${renderNavButton("collections", renderSidebarIcon("collections", "Coleções"), "Coleções")}
@@ -107,6 +111,7 @@ function renderMainSidebar(): string {
 
 function renderSettingsSidebar(): string {
   const isAdmin = state.user?.role === "admin";
+  const canDownload = isAdmin || state.user?.role === "superuser";
   return `
     <nav class="settings-sidebar" aria-label="Configurações">
       <div class="settings-group">
@@ -123,6 +128,16 @@ function renderSettingsSidebar(): string {
               ${renderServerSectionButton("users", "Usuários")}
               ${renderServerSectionButton("reading", "Modo de leitura")}
               ${renderServerSectionButton("vault", "Cofre pessoal")}
+            </div>
+          `
+          : ""
+      }
+      ${
+        canDownload
+          ? `
+            <div class="settings-group">
+              <h3>Ferramentas</h3>
+              ${renderSettingsButton("download", "Download")}
             </div>
           `
           : ""

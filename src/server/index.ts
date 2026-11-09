@@ -1,4 +1,9 @@
+import { pageImageVariant } from "./reader-resources.js";
 import crypto from "node:crypto";
+import { rpgSheetCopyFolder } from '../shared/rpg-folders.js';
+import { handleRpg } from './rpg.js';
+import { reconcilePdfLocation, pdfLocationMissing } from './pdf-locations.js';
+import { describeForm, fillCopyBytes, copyName, publishCopy, FormError, formRevision, fullFormName, withFormLock, updateForm, previewPdf } from "./pdf-forms.js";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -7,13 +12,23 @@ import { config } from "./config.js";
 import { cacheService } from "./cache.js";
 import { readJson, sendBuffer, sendFile, sendHtml, sendJson, sendNoContent, serveStatic } from "./http.js";
 import { sendPasswordResetEmail } from "./mailer.js";
-import { canSyncLibrary, getPugotiSyncStatus, startPugotiSync } from "./pugoti-sync.js";
-import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentPagePath, scanLibrary, startLibraryWatchers } from "./media.js";
+import { canDownloadToLibrary, canSyncLibrary, getPugotiSyncStatus, isPugotiSyncBusy, startPugotiSync } from "./pugoti-sync.js";
+import { getContentCoverPath, getContentCoverThumbnail, getContentEpubAsset, getContentEpubChapterHtml, getContentEpubTextLengths, getContentPagePath, scanLibrary as scanMediaLibrary, searchEpubText, startLibraryWatchers } from "./media.js";
 import { normalizeReadingDefaults, normalizeVaultTimeoutMinutes, store } from "./store.js";
-import type { ContentCollection, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
+import type { ContentCollection, ContentItem, ContentReview, Invitation, Library, LibraryKind, PasswordResetToken, PublicContentReview, ServerSettings, User } from "../shared/types.js";
 
 function isPersonalLibrary(library: Library): boolean {
   return Boolean(library.isPersonal);
+}
+
+async function scanLibrary(library:Library,options:{refresh?:boolean}={}):Promise<ContentItem[]> {
+  const contents=await scanMediaLibrary(library,options);
+  if(!['other','book','lightNovel'].includes(library.kind))return contents;
+  const result:ContentItem[]=[];
+  for(const content of contents){
+    if(!content.pageTypes.includes('pdf') || await reconcilePdfLocation(library,content.id)===content.id)result.push(content);
+  }
+  return result;
 }
 
 function getVisibleLibraries(user: User, libraries: Library[]): Library[] {
@@ -25,6 +40,23 @@ function getVisibleLibraries(user: User, libraries: Library[]): Library[] {
 
 function getPersonalLibraries(user: User, libraries: Library[]): Library[] {
   return libraries.filter((library) => isPersonalLibrary(library) && library.ownerUserId === user.id);
+}
+
+function findDownloadLibrary(libraries: Library[], kind: "manga" | "manhwa"): Library | undefined {
+  const directMatch = libraries.find((library) => !library.isPersonal && library.kind === kind);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  // Bibliotecas antigas de manhwa podem ter sido cadastradas como "manga".
+  // Não alteramos seu schema aqui; apenas identificamos corretamente a pasta
+  // de destino para o download individual.
+  const normalizedKind = kind === "manhwa" ? "manhwa" : "manga";
+  return libraries.find((library) =>
+    !library.isPersonal
+    && canSyncLibrary(library)
+    && `${library.name} ${library.path}`.normalize("NFD").replaceAll(/\p{Diacritic}/gu, "").toLowerCase().includes(normalizedKind)
+  );
 }
 
 function createVaultToken(userId: string, timeoutMinutes: number): string {
@@ -69,7 +101,17 @@ function findVisibleLibraryForContentId(user: User, libraries: Library[], conten
   return getVisibleLibraries(user, libraries).find((item) => contentId.startsWith(`${item.id}:`)) ?? null;
 }
 
+function visibleContents(user: User, contents: ContentItem[]): ContentItem[] {
+  const copies = new Map(store.pdfFormCopies().map(copy => [copy.contentId, copy]));
+  const roles = new Map(store.rpgDocuments().map(item => [item.contentId,item.role]));
+  return contents.filter((content) => store.canAccessPdfContent(content.id, user)).map(content => {
+    const copy = copies.get(content.id);
+    return { ...content, rpgRole: roles.get(content.id), ...(copy ? {system:copy.system || content.system,formOwnerUserId:copy.ownerUserId || null,formVisibility:copy.visibility} : {}) };
+  });
+}
+
 async function findVisibleContent(user: User, contentId: string): Promise<{ library: Library; pageCount: number } | null> {
+  if (!store.canAccessPdfContent(contentId, user)) return null;
   const data = await store.read();
   const library = findVisibleLibraryForContentId(user, data.libraries, contentId);
   if (!library) {
@@ -82,6 +124,7 @@ async function findVisibleContent(user: User, contentId: string): Promise<{ libr
 }
 
 async function findRequestContent(user: User, contentId: string, req: http.IncomingMessage): Promise<{ library: Library; pageCount: number } | null> {
+  if (!store.canAccessPdfContent(contentId, user)) return null;
   const data = await store.read();
   const libraryId = contentId.split(":")[0] ?? "";
   const library = getRequestLibrary(user, data.libraries, libraryId, req);
@@ -121,7 +164,7 @@ function parseContentEpubAssetPath(pathname: string): { contentId: string; asset
 function waitForSyncCompletion(): Promise<void> {
   return new Promise((resolve) => {
     const timer = setInterval(() => {
-      if (getPugotiSyncStatus().state !== "running") {
+      if (!isPugotiSyncBusy()) {
         clearInterval(timer);
         resolve();
       }
@@ -132,7 +175,7 @@ function waitForSyncCompletion(): Promise<void> {
 let automaticSyncCycleRunning = false;
 
 async function runAutomaticSyncCycle(): Promise<void> {
-  if (automaticSyncCycleRunning || getPugotiSyncStatus().state === "running") {
+  if (automaticSyncCycleRunning || isPugotiSyncBusy()) {
     console.log("[SYNC] Ciclo automático ignorado: já existe uma sincronização em andamento.");
     return;
   }
@@ -253,7 +296,8 @@ function sanitizeLibraryIds(libraryIds: string[], libraries: Library[]): string[
 }
 
 function sanitizeUserRole(role: unknown): User["role"] {
-  return role === "admin" ? "admin" : "user";
+  if (role === "admin" || role === "superuser") return role as User["role"];
+  return "user";
 }
 
 function hasConfiguredAdmin(users: User[]): boolean {
@@ -366,7 +410,11 @@ async function invalidateLibraryScanCache(libraryId: string): Promise<void> {
 
 function getNoDetectedContentMessage(kind: LibraryKind): string {
   if (kind === "book" || kind === "lightNovel") {
-    return "Nenhuma obra detectada. Para livros, coloque arquivos .epub na pasta da biblioteca ou dentro de pastas de obras.";
+    return "Nenhuma obra detectada. Para livros, coloque arquivos .epub ou .pdf na pasta da biblioteca ou dentro de pastas de obras.";
+  }
+
+  if (kind === "other") {
+    return "Nenhuma obra detectada. A pasta deve conter PDFs diretamente ou pastas de obras com imagens ou PDFs.";
   }
 
   return "Nenhuma obra detectada. A pasta deve conter pastas de obras com imagens ou PDFs.";
@@ -729,6 +777,30 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
+  const directContent = url.pathname.match(/^\/api\/contents\/([^/]+)/);
+  if (directContent) {
+    const id=decodeURIComponent(directContent[1]);
+    const library=getRequestLibrary(user,(await store.read()).libraries,id.split(':')[0],req);
+    if(library) {
+      const canonical=await reconcilePdfLocation(library,id);
+      if(canonical!==id){sendJson(res,404,{error:'Use o material original da biblioteca.'});return;}
+    }
+  }
+
+  if (url.pathname === "/api/me/reading-settings" && req.method === "GET") {
+    const data = await store.read();
+    sendJson(res, 200, { readingDefaults: data.settings.readingDefaults });
+    return;
+  }
+
+  if (url.pathname === "/api/me/startup" && req.method === "GET") {
+    const data = await store.read();
+    const selected = data.settings.startupLibraries?.[user.id];
+    const libraryId = getVisibleLibraries(user, data.libraries).find(item => item.id === selected)?.id ?? null;
+    sendJson(res, 200, { libraryId });
+    return;
+  }
+
   if (url.pathname === "/api/me" && req.method === "GET") {
     sendJson(res, 200, { user: toPublicUser(user) });
     return;
@@ -935,7 +1007,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
+    if (body.startupLibraries !== undefined) {
+      const data = await store.read();
+      if (!body.startupLibraries || typeof body.startupLibraries !== "object" || Array.isArray(body.startupLibraries) || Object.entries(body.startupLibraries).some(([id, libraryId]) => {
+        const target = data.users.find(item => item.id === id);
+        return !target || typeof libraryId !== "string" || (libraryId !== "" && !getVisibleLibraries(target, data.libraries).some(item => item.id === libraryId));
+      })) {
+        sendJson(res, 400, { error: "Selecione uma biblioteca acessível ao usuário." });
+        return;
+      }
+    }
     const settings = await store.updateSettings({
+      startupLibraries: body.startupLibraries,
       vaultTimeoutMinutes: body.vaultTimeoutMinutes === undefined ? undefined : Number(body.vaultTimeoutMinutes),
       readingDefaults: body.readingDefaults === undefined ? undefined : normalizeReadingDefaults(body.readingDefaults)
     });
@@ -989,6 +1072,73 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       sendJson(res, 202, { sync });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Não foi possível sincronizar a biblioteca.";
+      sendJson(res, message === "Já existe uma sincronização em andamento." ? 409 : 500, { error: message });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/admin/download" && req.method === "POST") {
+    if (user.role !== "admin" && user.role !== "superuser") {
+      sendJson(res, 403, { error: "Apenas administradores e superusers podem iniciar downloads." });
+      return;
+    }
+
+    const body = await readJson<{ kind?: string; url?: string }>(req);
+    const requestedKind = body.kind === "manga" || body.kind === "manhwa" || body.kind === "vault" ? body.kind : null;
+    const link = String(body.url ?? "").trim();
+    if (!requestedKind) {
+      sendJson(res, 400, { error: "Selecione Mangá, Manhwa ou Cofre." });
+      return;
+    }
+
+    let parsedLink: URL;
+    try {
+      parsedLink = new URL(link);
+    } catch {
+      sendJson(res, 400, { error: "Informe um link válido." });
+      return;
+    }
+    if (!/^https?:$/.test(parsedLink.protocol) || !parsedLink.hostname || !parsedLink.pathname || parsedLink.username || parsedLink.password) {
+      sendJson(res, 400, { error: "Informe um link HTTP ou HTTPS válido." });
+      return;
+    }
+
+    const data = await store.read();
+    const vaultLibrary = requestedKind === "vault"
+      ? getPersonalLibraries(user, data.libraries).find(canDownloadToLibrary)
+      : undefined;
+    if (requestedKind === "vault" && !hasValidVaultToken(req, user)) {
+      sendJson(res, 403, { error: "Desbloqueie o cofre antes de adicionar uma obra a ele." });
+      return;
+    }
+
+    const library = vaultLibrary ?? (requestedKind === "vault" ? undefined : findDownloadLibrary(data.libraries, requestedKind));
+    if (!library) {
+      const label = requestedKind === "vault" ? "cofre pessoal" : requestedKind === "manga" ? "mangás" : "manhwas";
+      sendJson(res, 404, { error: `Nenhuma biblioteca de ${label} está configurada.` });
+      return;
+    }
+
+    const downloadKind = requestedKind === "vault"
+      ? (library.kind === "manhwa" ? "manhwa" : "manga")
+      : requestedKind;
+
+    try {
+      const sync = await startPugotiSync(
+        library,
+        null,
+        async () => {
+          await invalidateLibraryScanCache(library.id);
+          await scanLibrary(library, { refresh: true });
+          await store.markLibraryScanned(library.id, new Date().toISOString());
+        },
+        "manual",
+        { kind: downloadKind, url: parsedLink.toString() }
+      );
+      const queuePosition = sync.queuedDownloads.length;
+      sendJson(res, 202, { sync, queued: queuePosition > 0, queuePosition });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível iniciar o download.";
       sendJson(res, message === "Já existe uma sincronização em andamento." ? 409 : 500, { error: message });
     }
     return;
@@ -1316,6 +1466,38 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
+  if (url.pathname === "/api/admin/pdf-form-copies" && req.method === "GET") {
+    if (user.role !== "admin") { sendJson(res, 403, { error: "Apenas administradores podem gerenciar fichas." }); return; }
+    const data = await store.read();
+    const contents = (await Promise.all(data.libraries.map(library => scanLibrary(library)))).flat();
+    const contentById = new Map(contents.map(content => [content.id, content]));
+    sendJson(res, 200, { copies: store.pdfFormCopies().map(copy => ({
+      ...copy,
+      title: contentById.get(copy.contentId)?.title,
+      system: copy.system || contentById.get(copy.contentId)?.system || ""
+    })) });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/admin/pdf-form-copies/") && req.method === "PATCH") {
+    if (user.role !== "admin") { sendJson(res, 403, { error: "Apenas administradores podem gerenciar fichas." }); return; }
+    const contentId = decodeURIComponent(url.pathname.slice("/api/admin/pdf-form-copies/".length));
+    const body = await readJson<{ ownerUserId?: string; visibility?: string; sharedWithUserIds?: string[]; system?: string }>(req);
+    try {
+      const copy = store.updatePdfFormCopy(contentId, {
+        ownerUserId: body.ownerUserId ?? "",
+        visibility: body.visibility ?? "private",
+        sharedWithUserIds: Array.isArray(body.sharedWithUserIds) ? body.sharedWithUserIds : [],
+        system: body.system ?? ""
+      });
+      if (!copy) { sendJson(res, 404, { error: "Ficha não encontrada." }); return; }
+      sendJson(res, 200, { copy });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Não foi possível atualizar a ficha." });
+    }
+    return;
+  }
+
   if (url.pathname.startsWith("/api/libraries/") && url.pathname.endsWith("/contents") && req.method === "GET") {
     const libraryId = url.pathname.split("/")[3];
     const data = await store.read();
@@ -1326,7 +1508,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    const contents = await scanLibrary(library);
+    const contents = visibleContents(user, await scanLibrary(library));
     const limitValue = Number(url.searchParams.get("limit"));
     const offsetValue = Number(url.searchParams.get("offset"));
     const hasPagination = Number.isInteger(limitValue) && limitValue > 0;
@@ -1413,13 +1595,156 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
-  if (url.pathname.startsWith("/api/contents/") && req.method === "GET") {
+  const rpgMatch = url.pathname.match(/^\/api\/contents\/([^/]+)\/rpg$/);
+  if (rpgMatch) {
+    const contentId = decodeURIComponent(rpgMatch[1]);
+    const data = await store.read();
+    const library = getRequestLibrary(user,data.libraries,contentId.split(':')[0],req);
+    if (!library || library.kind !== 'other' || !store.canAccessPdfContent(contentId,user)) { sendJson(res,404,{error:'Material não encontrado.'}); return; }
+    let contents = visibleContents(user,await scanLibrary(library));
+    if(!contents.some(item=>item.id===contentId))contents=visibleContents(user,await scanLibrary(library,{refresh:true}));
+    const content = contents.find(item => item.id === contentId && item.pageTypes.includes('pdf'));
+    if (!content) { sendJson(res,404,{error:'PDF não encontrado.'}); return; }
+    await handleRpg(req,res,user,library,content,contents);
+    return;
+  }
+
+  const formMatch = url.pathname.match(/^\/api\/contents\/([^/]+)\/pdf-form(?:\/(copies|save|rename|preview))?$/);
+  if (formMatch && (req.method === "GET" || req.method === "POST")) {
+    const contentId = decodeURIComponent(formMatch[1]);
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, contentId.split(":")[0], req);
+    if (!library || !store.canAccessPdfContent(contentId, user)) { sendJson(res, 404, { error: "Conteúdo não encontrado." }); return; }
+    const isTemplate = store.rpgDocuments().some(item => item.contentId === contentId && item.role === 'template');
+    const canEdit = store.canEditPdfContent(contentId,user);
+    const permissions = {canSave:canEdit,canEdit,saveCreatesCopy:isTemplate};
+    if (req.method === 'POST' && !canEdit) { sendJson(res,403,{error:'Esta ficha foi compartilhada apenas para leitura.'}); return; }
+    if (formMatch[2] === 'rename' && isTemplate) { sendJson(res,403,{error:'O modelo original é preservado. Salve uma cópia pessoal.'}); return; }
+    if (!["other", "book", "lightNovel"].includes(library.kind)) {
+      sendJson(res, 400, { error: "Preenchimento disponível nas bibliotecas de livros e RPG." }); return;
+    }
+    const source = await getContentPagePath(library, contentId, 0);
+    if (!source) { sendJson(res, 404, { error: "PDF não encontrado." }); return; }
+    try {
+      const root = await fs.realpath(library.path);
+      const realSource = await fs.realpath(source);
+      if (!realSource.startsWith(root + path.sep)) { sendJson(res, 403, { error: "Arquivo fora da biblioteca." }); return; }
+      if (req.method === "GET" && !formMatch[2]) {
+        const revision=await formRevision(realSource), schema=await describeForm(realSource);
+        if(revision!==await formRevision(realSource)) throw new FormError('A ficha mudou enquanto era aberta. Tente novamente.');
+        sendJson(res, 200, { ...schema, ...permissions, revision }); return;
+      }
+      if (req.method !== "POST" || !formMatch[2]) { sendJson(res, 405, { error: "Método inválido." }); return; }
+      if (req.headers["sec-fetch-site"] === "cross-site") { sendJson(res, 403, { error: "Origem inválida." }); return; }
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += Buffer.byteLength(chunk);
+        if (size > 256 * 1024) { sendJson(res, 413, { error: "Formulário grande demais." }); return; }
+        chunks.push(Buffer.from(chunk));
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as { name?: unknown; values?: unknown; styles?: unknown; edits?: unknown; revision?: unknown; originalName?: unknown; moduleId?: unknown };
+      if (formMatch[2] === 'preview') {
+        const revision = await formRevision(realSource);
+        if (revision !== body.revision) throw new FormError('O PDF mudou. Reabra antes de continuar.');
+        const preview = await previewPdf(realSource, body.values, body.styles, body.edits);
+        if (revision !== await formRevision(realSource)) throw new FormError('O PDF mudou durante a prévia. Reabra antes de continuar.');
+        sendJson(res, 200, { ...preview, schema: { ...preview.schema, revision, ...permissions } }); return;
+      }
+      if(formMatch[2] !== 'copies' && !isTemplate){
+        await withFormLock(realSource, async()=>{
+          if(await formRevision(realSource)!==body.revision) throw new FormError('A ficha mudou. Reabra antes de salvar ou renomear.');
+          let filename=path.relative(root,realSource), id=contentId;
+          const target=path.join(path.dirname(realSource),body.name===undefined||body.name===''?path.basename(realSource):fullFormName(body.name));
+          const bytes=formMatch[2]==='save'?await fillCopyBytes(realSource,body.values,body.styles,body.edits):null;
+          if(target===realSource){
+            if(bytes)await updateForm(realSource,bytes,body.revision);
+          }else{
+            try{await fs.link(realSource,target);}catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')throw new FormError('Já existe uma ficha com esse nome.');throw error;}
+            filename=path.relative(root,target);id=`${library.id}:${Buffer.from(filename).toString('base64url')}`;
+            try{
+              if(bytes)await updateForm(target,bytes,body.revision);
+              if(await formRevision(realSource)!==body.revision)throw new FormError('A ficha mudou. Reabra antes de salvar.');
+              store.renamePdfReferences(contentId,id);
+            }catch(error){await fs.unlink(target);throw error;}
+            try{await fs.unlink(realSource);}catch(error){store.renamePdfReferences(id,contentId);await fs.unlink(target);throw error;}
+          }
+          store.updatePdfCopyRevision(id,await formRevision(target));
+          const contents=await scanLibrary(library,{refresh:true});
+          sendJson(res,200,{filename,previousId:contentId,content:contents.find(item=>item.id===id)??null,revision:await formRevision(path.join(root,filename)),...await describeForm(path.join(root,filename))});
+        });return;
+      }
+      const parentCopy = store.pdfFormCopies().find(item => item.contentId === contentId);
+      const template = store.rpgDocuments().find(item => item.contentId === contentId && item.role === 'template');
+      const links = store.rpgLinks().filter(link => link.templateId === template?.id);
+      const moduleId = body.moduleId ?? parentCopy?.moduleId ?? (links.length === 1 ? links[0].moduleId : null);
+      if (moduleId && !store.rpgDocuments().some(item => item.id === moduleId && item.role === 'module' && item.contentId.startsWith(library.id + ':') && (parentCopy?.moduleId === moduleId || links.some(link => link.moduleId === moduleId)))) throw new FormError('Módulo inválido para este modelo.');
+      const base = body.name===undefined||body.name===''?copyName(source,undefined):fullFormName(body.name).slice(0,-4);
+      if (body.revision !== undefined && body.revision !== await formRevision(realSource)) throw new FormError('O PDF mudou. Reabra antes de salvar.');
+      const bytes = await fillCopyBytes(realSource, body.values, body.styles, body.edits);
+      const destination = library.kind === 'other' ? path.join(root,rpgSheetCopyFolder(path.relative(root,realSource))) : path.dirname(realSource);
+      await fs.mkdir(destination,{recursive:true});
+      const destinationPath=await fs.realpath(destination);
+      if(destinationPath!==root && !destinationPath.startsWith(root+path.sep))throw new FormError('A pasta Fichas deve estar dentro da biblioteca.');
+      const publishedName = await publishCopy(destination, base, bytes, name => {
+        const relative=path.relative(root,path.join(destination,name));
+        const newId=`${library.id}:${Buffer.from(relative).toString('base64url')}`;
+        const folder=path.dirname(relative)==='.'?'':path.dirname(relative).split(path.sep).join('/');
+        store.registerPdfCopy(newId,parentCopy?.sourceId ?? contentId,crypto.createHash('sha256').update(bytes).digest('hex'),user.id,folder);
+        store.setPdfCopyModule(newId,moduleId as string | null);
+      });
+      const filename = path.relative(root, path.join(destination, publishedName));
+      const id = `${library.id}:${Buffer.from(filename).toString("base64url")}`;
+      // Force a completed scan (including a scan already running) so the new
+      // item is immediately available through normal library navigation.
+      let contents = await scanLibrary(library, { refresh: true });
+      if (!contents.some(item => item.id === id)) contents = await scanLibrary(library, { refresh: true });
+      sendJson(res, 201, { filename, content: visibleContents(user,contents).find(item => item.id === id) ?? null });
+    } catch (error) {
+      console.error("Falha no formulário PDF", error);
+      sendJson(res, 400, { error: error instanceof FormError ? error.message : "Não foi possível salvar a cópia. Verifique o arquivo e a permissão de escrita da biblioteca." });
+    }
+    return;
+  }
+
+  const epubMetricsMatch = url.pathname.match(/^\/api\/contents\/(.+)\/epub-metrics$/);
+  if (epubMetricsMatch && req.method === "GET") {
+    const contentId = decodeURIComponent(epubMetricsMatch[1]);
+    const data = await store.read();
+    const library = getRequestLibrary(user, data.libraries, contentId.split(":")[0] ?? "", req);
+    if (!library || !store.canAccessPdfContent(contentId, user)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+    const lengths = await getContentEpubTextLengths(library, contentId);
+    if (!lengths) sendJson(res, 404, { error: "EPUB não encontrado." });
+    else sendJson(res, 200, { lengths });
+    return;
+  }
+
+  const epubSearchMatch = url.pathname.match(/^\/api\/contents\/(.+)\/epub-search$/);
+  if (epubSearchMatch && req.method === "GET") {
+    const contentId = decodeURIComponent(epubSearchMatch[1]);
+    const termo = (url.searchParams.get("q") ?? "").trim();
+    const data = await store.read();
+    const libraryId = contentId.split(":")[0] ?? "";
+    const library = getRequestLibrary(user, data.libraries, libraryId, req);
+    if (!library || !store.canAccessPdfContent(contentId, user)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+    const resultado = await searchEpubText(library, contentId, termo);
+    sendJson(res, 200, resultado);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/contents/") && (req.method === "GET" || req.method === "HEAD")) {
     const epubAssetRequest = parseContentEpubAssetPath(url.pathname);
     if (epubAssetRequest) {
       const data = await store.read();
       const libraryId = epubAssetRequest.contentId.split(":")[0] ?? "";
       const library = getRequestLibrary(user, data.libraries, libraryId, req);
-      if (!library) {
+      if (!library || !store.canAccessPdfContent(epubAssetRequest.contentId, user)) {
         sendJson(res, 404, { error: "Conteúdo não encontrado." });
         return;
       }
@@ -1430,7 +1755,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         return;
       }
 
-      sendBuffer(res, asset.path, asset.data);
+      sendBuffer(req, res, asset.path, asset.data);
       return;
     }
 
@@ -1439,14 +1764,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       const data = await store.read();
       const libraryId = coverRequest.contentId.split(":")[0] ?? "";
       const library = getRequestLibrary(user, data.libraries, libraryId, req);
-      if (!library) {
+      if (!library || !store.canAccessPdfContent(coverRequest.contentId, user)) {
         sendJson(res, 404, { error: "Conteúdo não encontrado." });
         return;
       }
 
       const thumbPath = await getContentCoverThumbnail(library, coverRequest.contentId);
       if (thumbPath) {
-        await sendFile(res, thumbPath, "no-cache, no-store, must-revalidate");
+        await sendFile(req, res, thumbPath, url.searchParams.has("v") ? "private, max-age=31536000, immutable" : "private, no-cache, must-revalidate");
         return;
       }
 
@@ -1456,7 +1781,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
         return;
       }
 
-      await sendFile(res, coverPath, "no-cache, no-store, must-revalidate");
+      await sendFile(req, res, coverPath, url.searchParams.has("v") ? "private, max-age=31536000, immutable" : "private, no-cache, must-revalidate");
       return;
     }
 
@@ -1469,15 +1794,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     const data = await store.read();
     const libraryId = pageRequest.contentId.split(":")[0] ?? "";
     const library = getRequestLibrary(user, data.libraries, libraryId, req);
-    if (!library) {
+    if (!library || !store.canAccessPdfContent(pageRequest.contentId, user)) {
       sendJson(res, 404, { error: "Conteúdo não encontrado." });
       return;
     }
 
-    const bookTheme = url.searchParams.get("theme") === "dark" ? "dark" : "light";
-    const epubHtml = await getContentEpubChapterHtml(library, pageRequest.contentId, pageRequest.pageIndex, bookTheme);
+    const bookTheme = url.searchParams.get("theme") === "dark" ? "dark" : url.searchParams.get("theme") === "sepia" ? "sepia" : "light";
+    const readDirection = url.searchParams.get("direction") === "rtl" ? "rtl" : "ltr";
+    const epubHtml = await getContentEpubChapterHtml(library, pageRequest.contentId, pageRequest.pageIndex, bookTheme, readDirection);
     if (epubHtml) {
-      sendHtml(res, epubHtml);
+      sendHtml(req, res, epubHtml);
       return;
     }
 
@@ -1487,7 +1813,19 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       return;
     }
 
-    await sendFile(res, pagePath);
+    // Access checks above run for every request, including cached variants.
+    // Range requests always address the original file's byte representation.
+    if (!req.headers.range) {
+      const variant = await pageImageVariant(pagePath, url.searchParams.get("width")).catch(() => null);
+      if (variant) {
+        const headers = { "Content-Type": "image/webp", "Cache-Control": "private, max-age=3600", "ETag": variant.etag };
+        if (req.headers["if-none-match"] === variant.etag) { res.writeHead(304, headers); res.end(); return; }
+        res.writeHead(200, { ...headers, "Content-Length": String(variant.data.length) });
+        res.end(req.method === "HEAD" ? undefined : variant.data);
+        return;
+      }
+    }
+    await sendFile(req, res, pagePath, path.extname(pagePath).toLowerCase()==='.pdf' ? 'no-cache, private, must-revalidate' : undefined);
     return;
   }
 
@@ -1498,14 +1836,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
-  if (url.pathname === "/api/user-lists" && req.method === "GET") {
+    if (url.pathname === "/api/user-lists" && req.method === "GET") {
     const data = await store.read();
     const wantToRead = data.wantToRead.filter((item) => item.userId === user.id).map((item) => item.contentId);
     const readingList = data.readingList.filter((item) => item.userId === user.id).map((item) => item.contentId);
     const collections = data.collections
       .filter((item) => item.userId === user.id || item.sharedWithUserIds.includes(user.id))
       .map((collection) => makePublicCollection(collection, data.users.find((item) => item.id === collection.userId)));
-    sendJson(res, 200, { wantToRead, readingList, collections });
+        sendJson(res, 200, { wantToRead, readingList, collections });
     return;
   }
 
@@ -1613,6 +1951,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
   if (url.pathname === "/api/bookmarks" && req.method === "GET") {
     const data = await store.read();
     const bookmarks = data.bookmarks.filter((item) => item.userId === user.id);
+    if (url.searchParams.get("includeContents") === "1") {
+      const libraryIds = new Set(bookmarks.map((item) => item.contentId.split(":")[0]));
+      const libraries = data.libraries.filter((library) => libraryIds.has(library.id) && getRequestLibrary(user, data.libraries, library.id, req));
+      const scanned = (await Promise.all(libraries.map(async (library) => {
+        const libraryMarks=bookmarks.filter(item=>item.contentId.startsWith(library.id+':'));
+        const missing=await Promise.all(libraryMarks.map(item=>pdfLocationMissing(library,item.contentId)));
+        return scanLibrary(library,{refresh:missing.some(Boolean)});
+      }))).flat();
+      // Scanning can migrate IDs after a file move. Read marks AFTER reconciliation.
+      const currentBookmarks = (await store.read()).bookmarks.filter((item) => item.userId === user.id);
+      const ids = new Set(currentBookmarks.map((item) => item.contentId));
+      const contents = scanned.filter((content) => ids.has(content.id) && store.canAccessPdfContent(content.id, user));
+      const accessible = new Set(contents.map((content) => content.id));
+      sendJson(res, 200, { bookmarks: currentBookmarks.filter((item) => accessible.has(item.contentId)), contents });
+      return;
+    }
     sendJson(res, 200, { bookmarks });
     return;
   }
@@ -1625,7 +1979,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     }
 
     const data = await store.read();
-    if (!findVisibleLibraryForContentId(user, data.libraries, contentId)) {
+    if (!await findVisibleContent(user, contentId)) {
       sendJson(res, 404, { error: "Conteúdo não encontrado." });
       return;
     }
@@ -1646,7 +2000,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
   }
 
   if (url.pathname === "/api/progress" && req.method === "PUT") {
-    const body = await readJson<{ contentId: string; currentPage: number }>(req);
+    const body = await readJson<{ contentId: string; currentPage: number; epubOffset?: number }>(req);
     const visible = await findRequestContent(user, body.contentId, req);
     if (!visible) {
       sendJson(res, 404, { error: "Conteúdo não encontrado." });
@@ -1657,6 +2011,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
       userId: user.id,
       contentId: body.contentId,
       currentPage: Math.min(Math.max(Number(body.currentPage), 0), Math.max(visible.pageCount - 1, 0)),
+      epubOffset: Number.isFinite(body.epubOffset)
+        ? Math.min(Math.max(Number(body.epubOffset), 0), 1) : 0,
       updatedAt: new Date().toISOString()
     });
     sendNoContent(res);
@@ -1681,12 +2037,29 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse): P
     return;
   }
 
-  if (url.pathname === "/api/bookmarks" && req.method === "POST") {
-    const body = await readJson<{ contentId: string; page: number }>(req);
+  if (url.pathname === "/api/bookmarks" && (req.method === "POST" || req.method === "PATCH")) {
+    const body = await readJson<{ contentId?: unknown; page?: unknown; name?: unknown }>(req);
+    if (!body || typeof body.contentId !== "string" || !body.contentId ||
+        typeof body.page !== "number" || !Number.isSafeInteger(body.page) || body.page < 0) {
+      sendJson(res, 400, { error: "Informe uma obra e uma página válida." });
+      return;
+    }
+    if (req.method === "PATCH" && (typeof body.name !== "string" || body.name.trim().length > 120)) {
+      sendJson(res, 400, { error: "O nome deve ter até 120 caracteres." });
+      return;
+    }
+    if (!await findRequestContent(user, body.contentId, req)) {
+      sendJson(res, 404, { error: "Conteúdo não encontrado." });
+      return;
+    }
+    if (req.method === "PATCH") {
+      const bookmark = await store.renameBookmark(user.id, body.contentId, body.page, (body.name as string).trim());
+      if (!bookmark) { sendJson(res, 404, { error: "Página marcada não encontrada." }); return; }
+      sendJson(res, 200, { bookmark });
+      return;
+    }
     const result = await store.toggleBookmark({
-      userId: user.id,
-      contentId: body.contentId,
-      page: body.page,
+      userId: user.id, contentId: body.contentId, page: body.page,
       createdAt: new Date().toISOString()
     });
     sendJson(res, 200, result);
@@ -1876,6 +2249,13 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: "Erro interno do Pugotiread." });
   }
 });
+
+// Backfill filesystem identities before accepting requests, including pre-existing sheets.
+const initialLibraries=(await store.read()).libraries;
+for(const item of [...store.rpgDocuments(),...store.pdfFormCopies()]) {
+  const library=initialLibraries.find(library=>item.contentId.startsWith(library.id+':'));
+  if(library)await reconcilePdfLocation(library,item.contentId);
+}
 
 server.listen(config.port, () => {
   if (!config.smtpHost) {

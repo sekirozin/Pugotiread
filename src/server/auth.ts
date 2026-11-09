@@ -52,7 +52,7 @@ type PugotilabProfileResponse = {
     avatarUrl?: string;
     biography?: string;
     location?: string;
-    role?: "admin" | "user";
+    role?: "admin" | "superuser" | "user";
   };
 };
 
@@ -222,7 +222,7 @@ async function syncPugotilabSession(req: IncomingMessage, res?: ServerResponse):
     const nickname = profile.nickname || "";
     const biography = profile.biography || "";
     const location = profile.location || "";
-    const role = profile.role === "admin" ? "admin" : "user";
+    const role = profile.role === "admin" ? "admin" : profile.role === "superuser" ? "superuser" : "user";
     const now = new Date().toISOString();
     const data = await store.read();
     const existing = data.users.find((user) => user.username.toLowerCase() === username) ?? null;
@@ -316,6 +316,14 @@ export async function getCurrentUser(req: IncomingMessage, res?: ServerResponse)
 
   if (found.role === "admin" && !isPasswordHashReady(found.passwordHash)) {
     return syncPugotilabSession(req, res);
+  }
+
+  // Refresh central profile fields when the application loads. The local
+  // session still owns permissions and reading data; only the shared profile
+  // fields are synchronized by syncPugotilabSession.
+  const requestPath = (req.url ?? "").split("?", 1)[0];
+  if (requestPath === "/api/me" && getCookie(req, "pugotilab_session")) {
+    return (await syncPugotilabSession(req, res)) ?? found;
   }
 
   return found;
