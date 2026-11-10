@@ -71,7 +71,8 @@ export class PdfFormEditor {
         this.styles = styleDrafts.get(contentId) ?? Object.create(null);
         styleDrafts.set(contentId, this.styles);
         this.button.type = "button";
-        this.button.textContent = "Editar PDF";
+        this.button.innerHTML = '<svg class="reader-pdf-toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415z"/><path d="M16 5l3 3"/></svg>';
+        this.button.setAttribute("aria-label", "Editar PDF");
         this.button.disabled = true;
         this.button.title = "Preparando editor…";
         this.button.className = "pdf-form-toggle";
@@ -527,7 +528,7 @@ export class PdfFormEditor {
                 note.textContent = 'Modelo original preservado • Salvar cria sua ficha privada • Shift + clique: selecionar vários campos';
             this.name.value = schema.originalName;
             this.button.disabled = false;
-            this.button.title = "Editar texto e páginas do PDF";
+            this.button.title = "Editar PDF";
             this.name.title = `${schema.originalName}.pdf`;
             this.refresh();
             if (this.edits.length)

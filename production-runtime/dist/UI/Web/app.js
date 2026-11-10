@@ -8287,18 +8287,17 @@ function renderBotaoFotoPersonagem(content) {
     return `<button class="reader-pdf-photo-button" data-reader-action="foto-personagem" type="button" aria-label="${rotulo}" title="${rotulo}">${renderIconeToolbarPdf(ICONE_FOTO_PERSONAGEM)}</button>`;
 }
 function renderPainelFotoPersonagem(content) {
-    if (!ehFichaDeUsuario(content) || (!content.characterPhotoUrl && !podeTrocarFotoPersonagem(content)))
+    // Sem foto não há painel: ela é adicionada pelo ícone do menu lateral.
+    if (!ehFichaDeUsuario(content) || !content.characterPhotoUrl)
         return "";
     // Nome do personagem preenchido na ficha; sem nome, o título do arquivo.
     const nome = content.characterName || content.fileTitle || content.title;
     const editavel = podeTrocarFotoPersonagem(content);
-    const corpo = content.characterPhotoUrl
-        ? `<img class="reader-character-photo-image" src="${escapeHtml(content.characterPhotoUrl)}" alt="Foto de ${escapeHtml(nome)}" />`
-        : `<div class="reader-character-photo-empty">${renderIconeToolbarPdf(ICONE_FOTO_PERSONAGEM)}<span>Sem foto do personagem</span><button class="reader-character-photo-add" data-reader-action="foto-personagem" type="button">Adicionar foto</button></div>`;
-    const acoes = content.characterPhotoUrl && editavel
+    const corpo = `<img class="reader-character-photo-image" src="${escapeHtml(content.characterPhotoUrl)}" alt="Foto de ${escapeHtml(nome)}" />`;
+    const acoes = editavel
         ? `<div class="reader-character-photo-actions"><button type="button" data-reader-action="foto-personagem">Trocar</button><button type="button" data-character-photo-remove>Remover</button></div>`
         : "";
-    return `<aside class="reader-character-photo${content.characterPhotoUrl ? "" : " is-empty"}" data-character-photo aria-label="Foto de ${escapeHtml(nome)}">
+    return `<aside class="reader-character-photo" data-character-photo aria-label="Foto de ${escapeHtml(nome)}">
       <span class="reader-character-photo-label" title="${escapeHtml(nome)}">${escapeHtml(nome)}</span>${corpo}${acoes}<p class="reader-character-photo-status" data-character-photo-status role="status" aria-live="polite"></p>
     </aside>`;
 }
@@ -8344,6 +8343,8 @@ async function enviarFotoPersonagem(metodo, arquivo) {
     document.querySelector("[data-character-photo]")?.classList.add("is-loading");
     if (status())
         status().textContent = metodo === "DELETE" ? "Removendo…" : "Enviando foto…";
+    else
+        mostrarFeedbackPdf("Enviando foto…");
     try {
         const resposta = await fetch(`/api/contents/${encodeURIComponent(content.id)}/foto-personagem`, {
             method: metodo,
@@ -8364,6 +8365,11 @@ async function enviarFotoPersonagem(metodo, arquivo) {
         else
             alert(erro instanceof Error ? erro.message : "Não foi possível salvar a foto.");
     }
+    finally {
+        const feedback = document.querySelector(".reader-pdf-feedback");
+        if (feedback?.textContent === "Enviando foto…")
+            feedback.hidden = true;
+    }
 }
 function escolherFotoPersonagem() {
     const entrada = document.createElement("input");
@@ -8377,6 +8383,8 @@ function escolherFotoPersonagem() {
             const status = document.querySelector("[data-character-photo-status]");
             if (status)
                 status.textContent = "A imagem passa de 12 MB.";
+            else
+                alert("A imagem passa de 12 MB.");
             return;
         }
         void enviarFotoPersonagem("PUT", arquivo);
