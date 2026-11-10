@@ -107,8 +107,21 @@ function parseXmlAttributes(tag) {
 function normalizeZipPath(value) {
     return value.split(/[?#]/)[0]?.replaceAll("\\", "/").replace(/^\/+/, "") ?? "";
 }
+/** Nomes com "%" literal são válidos em EPUBs reais e não podem derrubar o capítulo. */
+function decodificarCaminhoEpub(valor) {
+    try {
+        return decodeURIComponent(valor);
+    }
+    catch {
+        return valor;
+    }
+}
+/** O unzip trata [ ] * ? como padrão e um "-" inicial como opção; aqui o nome é sempre literal. */
+function nomeLiteralUnzip(nome) {
+    return nome.replace(/[[*?]/g, (caractere) => `[${caractere}]`).replace(/^-/, "[-]");
+}
 function resolveZipPath(baseDir, href) {
-    const decodedHref = decodeURIComponent(normalizeZipPath(href));
+    const decodedHref = decodificarCaminhoEpub(normalizeZipPath(href));
     return path.posix.normalize(path.posix.join(baseDir, decodedHref)).replace(/^(\.\.\/)+/, "");
 }
 async function readZipEntry(zipPath, entryPath) {
@@ -122,7 +135,7 @@ async function extractZipEntry(zipPath, entryPath) {
     const candidates = Array.from(new Set([entryPath, `./${entryPath.replace(/^\.\/+/, "")}`]));
     for (const candidate of candidates) {
         try {
-            const { stdout } = await execFileAsync("unzip", ["-p", zipPath, candidate], {
+            const { stdout } = await execFileAsync("unzip", ["-p", zipPath, nomeLiteralUnzip(candidate)], {
                 encoding: "buffer",
                 maxBuffer: 30 * 1024 * 1024,
                 timeout: 15_000
@@ -952,13 +965,19 @@ async function findEpubPath(library, contentId) {
     const epubFile = await findFirstBookFile(contentPath);
     return epubFile ? resolveSafeMediaPath(library.path, contentPath, epubFile) : null;
 }
-function rewriteEpubAssetUrls(html, contentId, chapterHref) {
+function rewriteEpubAssetUrls(html, contentId, chapterHref, capitulos = []) {
     const chapterDir = path.posix.dirname(chapterHref) === "." ? "" : path.posix.dirname(chapterHref);
     return html.replace(/\b(src|href)\s*=\s*(["'])([^"']+)\2/gi, (full, attr, quote, rawUrl) => {
         if (/^(?:https?:|data:|mailto:|#)/i.test(rawUrl)) {
             return full;
         }
         const assetPath = resolveZipPath(chapterDir, rawUrl);
+        const capitulo = attr.toLowerCase() === "href" ? capitulos.findIndex((item) => item.href === assetPath) : -1;
+        if (capitulo >= 0) {
+            // O leitor abre o capítulo pelo próprio fluxo; o arquivo cru perderia tema, progresso e controles.
+            const ancora = rawUrl.includes("#") ? rawUrl.slice(rawUrl.indexOf("#") + 1) : "";
+            return `${attr}=${quote}#${quote} data-epub-capitulo=${quote}${capitulo}${quote} data-epub-ancora=${quote}${ancora}${quote}`;
+        }
         const assetUrl = `/api/contents/${encodeURIComponent(contentId)}/epub-assets/${assetPath.split("/").map(encodeURIComponent).join("/")}`;
         return `${attr}=${quote}${assetUrl}${quote}`;
     });
@@ -967,8 +986,11 @@ function extractHtmlPart(html, tagName) {
     const match = html.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"));
     return match?.[1] ?? "";
 }
-function wrapEpubChapterHtml(html, contentId, chapterHref, theme = "light", direction = "ltr") {
-    const rewritten = rewriteEpubAssetUrls(html, contentId, chapterHref)
+function wrapEpubChapterHtml(html, contentId, chapterHref, theme = "light", direction = "ltr", capitulos = []) {
+    const rewritten = rewriteEpubAssetUrls(html, contentId, chapterHref, capitulos)
+        // A proteção real é o cabeçalho CSP do capítulo; remover estes elementos só evita pedidos e redirecionamentos.
+        .replace(/<script\b[^>]*?(?:\/>|>[\s\S]*?<\/script\s*>)/gi, "")
+        .replace(/<meta\b[^>]*http-equiv[^>]*>/gi, "")
         .replace(/<\?xml[\s\S]*?\?>/gi, "")
         .replace(/<!doctype[\s\S]*?>/gi, "");
     const head = extractHtmlPart(rewritten, "head");
@@ -1105,7 +1127,7 @@ export async function getContentEpubChapterHtml(library, contentId, pageIndex, t
     if (!rawHtml) {
         return null;
     }
-    return wrapEpubChapterHtml(rawHtml, contentId, chapter.href, theme, direction);
+    return wrapEpubChapterHtml(rawHtml, contentId, chapter.href, theme, direction, epub.chapters);
 }
 const epubTextLengthCache = new Map();
 /** Text weights make the percentage independent of arbitrary EPUB spine splits. */

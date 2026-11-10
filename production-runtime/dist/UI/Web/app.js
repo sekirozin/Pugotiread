@@ -4854,6 +4854,52 @@ function advanceEpubPage(step) {
             void setReaderPage(reader.page + step, false, step < 0 ? 1 : 0);
     }
 }
+// Links do livro: capítulos abrem pelo leitor e endereços externos em outra guia, sem tirar o capítulo do lugar.
+function ligarLinksEpub(doc) {
+    doc.addEventListener("click", (event) => {
+        const link = event.target?.closest?.("a[href]");
+        if (!link)
+            return;
+        if (link.dataset.epubCapitulo !== undefined) {
+            event.preventDefault();
+            event.stopPropagation();
+            void seguirLinkEpub(Number(link.dataset.epubCapitulo), link.dataset.epubAncora ?? "");
+        }
+        else if (/^https?:/i.test(link.getAttribute("href") ?? "")) {
+            event.preventDefault();
+            event.stopPropagation();
+            window.open(link.href, "_blank", "noopener");
+        }
+    });
+}
+let ancoraEpubPendente = "";
+function rolarParaAncoraEpub(ancora) {
+    if (!ancora)
+        return;
+    let id = ancora;
+    try {
+        id = decodeURIComponent(ancora);
+    }
+    catch { /* A âncora pode conter "%" literal. */ }
+    const quadro = document.querySelector(".reader-epub");
+    const alvo = quadro?.contentDocument?.getElementById(id);
+    if (!alvo)
+        return;
+    alvo.scrollIntoView();
+    // O leitor reaplica o layout (fontes, redimensionamento) a partir desta posição salva.
+    if (state.reader)
+        state.reader.epubOffset = getEpubCurrentOffset(quadro);
+}
+async function seguirLinkEpub(capitulo, ancora) {
+    if (!state.reader)
+        return;
+    if (capitulo === state.reader.page) {
+        rolarParaAncoraEpub(ancora);
+        return;
+    }
+    ancoraEpubPendente = ancora;
+    await setReaderPage(capitulo, true);
+}
 function bindReaderEpubFrames() {
     document.querySelectorAll(".reader-epub").forEach((frame) => {
         const resize = () => {
@@ -4871,6 +4917,13 @@ function bindReaderEpubFrames() {
             applyEpubAppearance(frame, true);
             resize();
             const doc = frame.contentDocument;
+            if (doc?.body)
+                ligarLinksEpub(doc);
+            if (ancoraEpubPendente) {
+                const ancora = ancoraEpubPendente;
+                ancoraEpubPendente = "";
+                requestAnimationFrame(() => rolarParaAncoraEpub(ancora));
+            }
             if (!doc?.body || typeof ResizeObserver === "undefined") {
                 return;
             }

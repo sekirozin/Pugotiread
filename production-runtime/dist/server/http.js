@@ -212,10 +212,13 @@ export function isPathInside(basePath, candidatePath) {
     const relativePath = path.relative(path.resolve(basePath), path.resolve(candidatePath));
     return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
+// Livros vêm de fora: o capítulo roda na mesma origem do app (o leitor precisa acessar o documento), então não pode executar nada.
+const POLITICA_CAPITULO_EPUB = "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'none'; base-uri 'none'; form-action 'none'";
 export function sendHtml(req, res, html) {
     const body = Buffer.from(html);
     res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": POLITICA_CAPITULO_EPUB,
         "Cache-Control": "private, max-age=3600",
         "Content-Length": String(body.length)
     });
@@ -224,6 +227,8 @@ export function sendHtml(req, res, html) {
 export function sendBuffer(req, res, filePath, file) {
     res.writeHead(200, {
         "Content-Type": getContentType(filePath),
+        "Content-Security-Policy": `sandbox; ${POLITICA_CAPITULO_EPUB}`,
+        "X-Content-Type-Options": "nosniff",
         "Cache-Control": getFileCacheControl(filePath),
         "Content-Length": String(file.length)
     });
