@@ -124,10 +124,10 @@ export class Store {
     }
     registerPdfCopy(contentId, sourceId, revision, ownerUserId, system = "") {
         this.db.prepare(`INSERT INTO pdf_form_copies
-      (contentId,sourceId,revision,ownerUserId,visibility,sharedWithUserIds,system)
-      VALUES (?, ?, ?, ?, 'private', '[]', ?)
+      (contentId,sourceId,revision,ownerUserId,authorUserId,visibility,sharedWithUserIds,system)
+      VALUES (?, ?, ?, ?, ?, 'private', '[]', ?)
       ON CONFLICT(contentId) DO UPDATE SET revision=excluded.revision`)
-            .run(contentId, sourceId, revision, ownerUserId, system);
+            .run(contentId, sourceId, revision, ownerUserId, ownerUserId, system);
     }
     updatePdfCopyRevision(contentId, revision) {
         this.db.prepare('UPDATE pdf_form_copies SET revision=? WHERE contentId=?').run(revision, contentId);
@@ -148,7 +148,7 @@ export class Store {
         }
     }
     pdfFormCopies() {
-        return this.db.prepare(`SELECT p.contentId,p.sourceId,p.moduleId,p.ownerUserId,COALESCE(u.displayName,'Usuário removido') ownerDisplayName,p.visibility,p.sharedWithUserIds,p.system FROM pdf_form_copies p LEFT JOIN users u ON u.id=p.ownerUserId ORDER BY p.contentId`).all().map(row => ({ ...row, sharedWithUserIds: JSON.parse(row.sharedWithUserIds || '[]') }));
+        return this.db.prepare(`SELECT p.contentId,p.sourceId,p.moduleId,p.ownerUserId,COALESCE(u.displayName,'Usuário removido') ownerDisplayName,p.authorUserId,CASE WHEN p.authorUserId='' THEN NULL ELSE COALESCE(a.displayName,'Usuário removido') END authorDisplayName,p.visibility,p.sharedWithUserIds,p.system FROM pdf_form_copies p LEFT JOIN users u ON u.id=p.ownerUserId LEFT JOIN users a ON a.id=p.authorUserId ORDER BY p.contentId`).all().map(row => ({ ...row, sharedWithUserIds: JSON.parse(row.sharedWithUserIds || '[]') }));
     }
     updatePdfFormCopy(contentId, input) {
         if (!['private', 'shared', 'public'].includes(input.visibility))
@@ -223,6 +223,11 @@ export class Store {
             this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN system TEXT NOT NULL DEFAULT ''");
         if (!pdfColumns.some(column => column.name === 'moduleId'))
             this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN moduleId TEXT");
+        if (!pdfColumns.some(column => column.name === 'authorUserId')) {
+            this.db.exec("ALTER TABLE pdf_form_copies ADD COLUMN authorUserId TEXT NOT NULL DEFAULT ''");
+            // Fichas anteriores não registraram quem as criou: o dono atual é a melhor informação disponível.
+            this.db.exec("UPDATE pdf_form_copies SET authorUserId=ownerUserId");
+        }
         this.db.exec(`CREATE TABLE IF NOT EXISTS rpg_documents (
       id TEXT PRIMARY KEY, contentId TEXT UNIQUE NOT NULL, role TEXT NOT NULL CHECK(role IN ('module','template'))
     );

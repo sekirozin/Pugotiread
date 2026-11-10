@@ -687,7 +687,7 @@ function visibleContents(user, contents) {
     return contents.filter((content) => store.canAccessPdfContent(content.id, user) && (user.role === 'admin' || !rpgUnclaimedSheet(content.id, copies))).map(content => {
         const copy = copies.get(content.id);
         const photo = copy ? photos.get(content.id) : null;
-        return { ...content, rpgRole: roles.get(content.id), ...(copy ? { system: rpgDisplaySystem(copy.system || content.system), formOwnerUserId: copy.ownerUserId || null, formVisibility: copy.visibility } : {}), ...(photo ? { pdfCoverUrl: content.coverUrl ?? null, ...characterPhotoUrls(content.id, photo) } : {}) };
+        return { ...content, rpgRole: roles.get(content.id), ...(copy ? { system: rpgDisplaySystem(copy.system || content.system), formOwnerUserId: copy.ownerUserId || null, formVisibility: copy.visibility } : {}), ...(copy?.ownerUserId && copy.authorDisplayName && roles.get(content.id) !== 'template' ? { authors: [copy.authorDisplayName] } : {}), ...(photo ? { pdfCoverUrl: content.coverUrl ?? null, ...characterPhotoUrls(content.id, photo) } : {}) };
     });
 }
 async function findVisibleContent(user, contentId) {
