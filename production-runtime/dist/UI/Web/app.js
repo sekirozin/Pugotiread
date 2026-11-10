@@ -1479,7 +1479,7 @@ function renderProfileReview(review) {
       <div>
         <div class="profile-review-header">
           <strong>${escapeHtml(content?.title ?? "Obra indisponível")}</strong>
-          <span>${escapeHtml(review.rating.toFixed(1))}</span>
+          ${renderEstrelasReview(review.rating)}
         </div>
         <p>${escapeHtml(review.comment)}</p>
         <small>${escapeHtml(new Date(review.updatedAt).toLocaleString("pt-BR"))}</small>
@@ -3924,8 +3924,26 @@ function renderSeriesRatingDisplay(rating, scale = "") {
   `;
 }
 function renderPersonalRatingDisplay(rating) {
-    const value = typeof rating === "number" && Number.isFinite(rating) ? rating.toFixed(1) : "N/A";
-    return `<span class="personal-rating-display"><strong>${escapeHtml(value)}</strong><small>/10</small></span>`;
+    const conteudo = typeof rating === "number" && Number.isFinite(rating) ? renderEstrelasReview(rating) : "<strong>N/A</strong>";
+    return `<span class="personal-rating-display">${conteudo}</span>`;
+}
+// Estrela do Tabler Icons, contornada ou preenchida pela classe "cheia".
+function renderEstrelaTabler(cheia = false) {
+    return `<svg class="review-estrela${cheia ? " cheia" : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873z"/></svg>`;
+}
+function notaEmEstrelas(nota) {
+    return Math.min(5, Math.max(0, Math.round(Number(nota) || 0)));
+}
+function renderEstrelasReview(nota) {
+    const estrelas = notaEmEstrelas(nota);
+    return `<span class="review-estrelas" role="img" aria-label="${estrelas} de 5 estrelas">${[1, 2, 3, 4, 5].map((posicao) => renderEstrelaTabler(posicao <= estrelas)).join("")}</span>`;
+}
+function renderCampoEstrelasReview(notaAtual) {
+    const estrelas = notaEmEstrelas(notaAtual);
+    return `<fieldset class="review-estrelas-campo">
+            <legend>Nota</legend>
+            <div class="review-estrelas-opcoes">${[1, 2, 3, 4, 5].map((posicao) => `<label title="${posicao} de 5"><input type="radio" name="rating" value="${posicao}" aria-label="${posicao} de 5 estrelas" required${posicao === estrelas ? " checked" : ""} />${renderEstrelaTabler()}</label>`).join("")}</div>
+          </fieldset>`;
 }
 function renderSeriesTabButton(tab, label, count) {
     const active = state.seriesTab === tab ? " active" : "";
@@ -3946,10 +3964,7 @@ function renderSeriesReviewsTab(content, reviews) {
           <span>${reviews.length} ${reviews.length === 1 ? "review" : "reviews"}</span>
         </div>
         <div class="review-form-grid">
-          <label class="form-row">
-            <span>Nota</span>
-            <input class="input" name="rating" type="number" min="0" max="10" step="0.1" value="${escapeHtml(String(currentUserReview?.rating ?? ""))}" />
-          </label>
+          ${renderCampoEstrelasReview(currentUserReview?.rating)}
           <label class="form-row review-comment">
             <span>Comentário</span>
             <textarea class="input" name="comment" rows="5" placeholder="Compartilhe sua opinião com outros leitores...">${escapeHtml(currentUserReview?.comment ?? "")}</textarea>
@@ -3976,7 +3991,7 @@ function renderReviewCard(review) {
           <strong>${escapeHtml(review.displayName)}</strong>
           <p>${escapeHtml(review.role === "admin" ? "Administrador" : review.role === "superuser" ? "Superuser" : "Usuário")}</p>
         </div>
-        <span class="review-score">${escapeHtml(review.rating.toFixed(1))}</span>
+        ${renderEstrelasReview(review.rating)}
       </div>
       <p class="review-comment-text">${escapeHtml(review.comment)}</p>
       <p class="review-date">${escapeHtml(new Date(review.updatedAt).toLocaleString("pt-BR"))}</p>
@@ -6219,8 +6234,8 @@ function bindShellEvents(root = document) {
             const formData = new FormData(form);
             const rating = Number(formData.get("rating"));
             const comment = String(formData.get("comment") ?? "").trim();
-            if (!Number.isFinite(rating) || rating < 0 || rating > 10 || !comment) {
-                state.seriesReviewError = "Informe uma nota entre 0 e 10 e um comentário.";
+            if (!Number.isInteger(rating) || rating < 1 || rating > 5 || !comment) {
+                state.seriesReviewError = "Escolha de 1 a 5 estrelas e escreva um comentário.";
                 renderShell();
                 return;
             }

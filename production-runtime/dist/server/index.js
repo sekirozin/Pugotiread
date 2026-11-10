@@ -2488,8 +2488,8 @@ async function handleApi(req, res) {
         const contentId = body.contentId?.trim();
         const rating = Number(body.rating);
         const comment = body.comment?.trim();
-        if (!contentId || !Number.isFinite(rating) || rating < 0 || rating > 10 || !comment) {
-            sendJson(res, 400, { error: "Conteúdo, nota e comentário são obrigatórios." });
+        if (!contentId || body.rating === null || !Number.isInteger(rating) || rating < 1 || rating > 5 || !comment) {
+            sendJson(res, 400, { error: "Conteúdo, nota de 1 a 5 estrelas e comentário são obrigatórios." });
             return;
         }
         const data = await store.read();

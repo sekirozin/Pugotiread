@@ -6524,3 +6524,21 @@ body {
 [data-theme="light"] { --bg: var(--pt-painel,#f6f0e8); }
 [data-theme="light"] .topbar { background: color-mix(in srgb,var(--pt-painel,rgb(255,250,243)) 92%,transparent); }
 [data-theme="light"] .sidebar { background: color-mix(in srgb,var(--pt-painel,rgb(255,250,243)) 92%,transparent); }
+
+/* Reviews em estrelas de 1 a 5 (09/11/2026). */
+.review-estrelas { display: inline-flex; gap: 2px; }
+.review-estrela { display: block; width: 18px; height: 18px; color: var(--muted); }
+.review-estrela.cheia { color: #f2b705; fill: currentColor; }
+.profile-review-header span.review-estrelas { padding: 0; background: none; }
+.review-estrelas-campo { min-width: 0; margin: 0; padding: 0; border: 0; }
+.review-estrelas-campo legend { margin-bottom: 6px; padding: 0; }
+.review-estrelas-opcoes { display: inline-flex; gap: 2px; }
+.review-estrelas-opcoes label { position: relative; display: block; padding: 3px; border-radius: 6px; cursor: pointer; }
+.review-estrelas-opcoes input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.review-estrelas-opcoes .review-estrela { width: 30px; height: 30px; }
+.review-estrelas-opcoes label:has(input:checked) .review-estrela,
+.review-estrelas-opcoes label:has(~ label input:checked) .review-estrela { color: #f2b705; fill: currentColor; }
+.review-estrelas-opcoes:has(label:hover) label .review-estrela { color: var(--muted); fill: none; }
+.review-estrelas-opcoes:has(label:hover) label:hover .review-estrela,
+.review-estrelas-opcoes:has(label:hover) label:has(~ label:hover) .review-estrela { color: #f2b705; fill: currentColor; }
+.review-estrelas-opcoes label:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }
