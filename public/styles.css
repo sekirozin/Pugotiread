@@ -5719,6 +5719,7 @@ body{background:radial-gradient(circle at 82% -10%,color-mix(in srgb,var(--pt-de
 .pdf-form-panel [role="status"] { flex: 1 0 100%; margin: 0; color: var(--pt-destaque-texto,#bae6fd); }
 .pdf-form-panel [role="status"]:empty { display: none; }
 .reader-pdf-side-toolbar .pdf-form-toggle { width: 44px; height: 44px; padding: 4px; }
+.reader-pdf-side-toolbar .pdf-form-toggle[hidden] { display: none; }
 .pdf-form-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
 .pdf-form-layer :is(input, textarea, select) { position: absolute; pointer-events: auto; box-sizing: border-box; margin: 0; padding: 0 2px; border: 1px solid var(--pt-destaque,#278dcc); border-radius: 0; background: #fff; color: #111; font: 12px sans-serif; min-width: 0; min-height: 0; resize: none; }
 .pdf-form-layer :is(input, textarea, select):focus { outline: 2px solid var(--pt-destaque,#ffbf24); outline-offset: 1px; }

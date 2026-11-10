@@ -76,7 +76,11 @@ export class PdfFormEditor {
         this.button.disabled = true;
         this.button.title = "Preparando editor…";
         this.button.className = "pdf-form-toggle";
-        root.querySelector(".reader-pdf-side-toolbar")?.append(this.button);
+        const menuLateral = root.querySelector(".reader-pdf-side-toolbar");
+        menuLateral?.append(this.button);
+        // O tipo do documento define se a edição é oferecida (tabela FERRAMENTAS_PDF_POR_TIPO em app.js).
+        if (menuLateral && !menuLateral.dataset.ferramentas?.split(" ").includes("editar"))
+            this.button.hidden = true;
         this.panel.className = "pdf-form-panel";
         this.panel.hidden = true;
         const heading = document.createElement("strong");

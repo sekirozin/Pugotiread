@@ -4471,17 +4471,17 @@ function renderReader(content, page, mode) {
         </div>
         <button class="reader-pdf-fullscreen" data-reader-action="fullscreen" type="button" aria-label="${escapeHtml(getReaderFullscreenLabel())}" title="${escapeHtml(getReaderFullscreenLabel())} (F)" aria-keyshortcuts="F" ${isReaderFullscreenAvailable() ? "" : "disabled"}><span class="icon">${renderIconeToolbarPdf("M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3")}</span></button>
       </nav>
-      <nav class="reader-pdf-side-toolbar" aria-label="Ferramentas do PDF">
-        <button class="reader-pdf-outline-button" data-reader-action="pdf-outline" type="button" aria-label="Abrir sumário" title="Sumário">${renderIconeToolbarPdf("M4 5h16M4 12h16M4 19h16")}</button>
-        <button class="reader-pdf-search-button" data-reader-action="pdf-search" type="button" aria-label="Pesquisar no PDF" title="Pesquisar no PDF (/ ou Ctrl+F)" aria-keyshortcuts="/ Control+F Meta+F">${renderIconeToolbarPdf("M21 21l-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0a8 8 0 0 1 16 0")}</button>
-        <button class="reader-pdf-bookmark" data-reader-action="bookmark" type="button" aria-label="Marcar página" title="Marcar página (B)" aria-keyshortcuts="B"><span class="icon">${renderIconeMarcadorPdf(isPageBookmarked(content.id, safePage))}</span></button>
-        <button class="reader-pdf-marks-button" data-reader-action="pdf-marks" type="button" aria-label="Páginas marcadas" title="Páginas marcadas" aria-controls="pdf-marks-panel" aria-expanded="false">${renderIconeToolbarPdf("M15 10v11l-5-3l-5 3V10a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3zM11 3h5a3 3 0 0 1 3 3v11")}<span class="reader-pdf-marks-count" aria-hidden="true" hidden></span></button>
+      <nav class="reader-pdf-side-toolbar" aria-label="Ferramentas do PDF" data-ferramentas="${ferramentasDoPdf(content).join(" ")}">
+        ${temFerramentaPdf(content, "sumario") ? `<button class="reader-pdf-outline-button" data-reader-action="pdf-outline" type="button" aria-label="Abrir sumário" title="Sumário">${renderIconeToolbarPdf("M4 5h16M4 12h16M4 19h16")}</button>` : ""}
+        ${temFerramentaPdf(content, "pesquisar") ? `<button class="reader-pdf-search-button" data-reader-action="pdf-search" type="button" aria-label="Pesquisar no PDF" title="Pesquisar no PDF (/ ou Ctrl+F)" aria-keyshortcuts="/ Control+F Meta+F">${renderIconeToolbarPdf("M21 21l-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0a8 8 0 0 1 16 0")}</button>` : ""}
+        ${temFerramentaPdf(content, "marcar") ? `<button class="reader-pdf-bookmark" data-reader-action="bookmark" type="button" aria-label="Marcar página" title="Marcar página (B)" aria-keyshortcuts="B"><span class="icon">${renderIconeMarcadorPdf(isPageBookmarked(content.id, safePage))}</span></button>` : ""}
+        ${temFerramentaPdf(content, "marcadas") ? `<button class="reader-pdf-marks-button" data-reader-action="pdf-marks" type="button" aria-label="Páginas marcadas" title="Páginas marcadas" aria-controls="pdf-marks-panel" aria-expanded="false">${renderIconeToolbarPdf("M15 10v11l-5-3l-5 3V10a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3zM11 3h5a3 3 0 0 1 3 3v11")}<span class="reader-pdf-marks-count" aria-hidden="true" hidden></span></button>` : ""}
         ${renderBotaoFotoPersonagem(content)}
-        <button class="reader-pdf-print-button" data-reader-action="pdf-print" type="button" aria-label="Imprimir PDF" title="Imprimir PDF">${renderIconeImprimirPdf()}</button>
-        <details class="reader-pdf-options">
+        ${temFerramentaPdf(content, "imprimir") ? `<button class="reader-pdf-print-button" data-reader-action="pdf-print" type="button" aria-label="Imprimir PDF" title="Imprimir PDF">${renderIconeImprimirPdf()}</button>` : ""}
+        ${temFerramentaPdf(content, "brilho") ? `<details class="reader-pdf-options">
           <summary aria-label="Ajustar brilho" title="Ajustar brilho">${renderIconeToolbarPdf("M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6L7 7m10 10l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4M16 12a4 4 0 1 1-8 0a4 4 0 0 1 8 0")}</summary>
           <label class="reader-pdf-brightness-panel">Brilho<input data-reader-brightness type="range" min="10" max="100" value="${brightness}" aria-label="Brilho" /></label>
-        </details>
+        </details>` : ""}
       </nav><div class="reader-pdf-feedback" role="status" aria-live="polite" hidden></div>${renderPainelFotoPersonagem(content)}` : ""}
       <div class="reader-pagination ${paginationClass}">
         <button class="zone prev" data-reader-action="page-prev" aria-label="Página anterior"></button>
@@ -7224,6 +7224,8 @@ function atualizarBotaoMarcadorPdf(pagina) {
     atualizarPainelMarcadoresPdf();
 }
 async function handleReaderBookmark() {
+    if (state.reader?.content.pageTypes.includes("pdf") && !temFerramentaPdf(state.reader.content, "marcar"))
+        return;
     if (!state.reader || !state.user || readerBookmarkPending)
         return;
     readerBookmarkPending = true;
@@ -8274,6 +8276,31 @@ document.addEventListener("input", event => {
 // da página vira miniatura no canto (clique amplia). O botão da barra lateral aparece para quem pode trocar a foto
 // (dono ou administrador). A foto também vira a capa do cartão (o servidor troca o coverUrl).
 const ICONE_FOTO_PERSONAGEM = "M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM12 10a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7z";
+// Ferramentas do menu lateral do PDF por tipo de documento. Para mudar o que cada tipo oferece, altere só esta tabela.
+const FERRAMENTAS_LEITURA_PDF = ["sumario", "pesquisar", "marcar", "marcadas", "imprimir", "brilho"];
+const FERRAMENTAS_FICHA_PDF = ["pesquisar", "imprimir", "brilho", "editar"];
+const FERRAMENTAS_PDF_POR_TIPO = {
+    "ficha-pessoal": FERRAMENTAS_FICHA_PDF,
+    "modelo-ficha": FERRAMENTAS_FICHA_PDF,
+    "modulo-rpg": FERRAMENTAS_LEITURA_PDF,
+    "material-rpg": FERRAMENTAS_LEITURA_PDF,
+    documento: FERRAMENTAS_LEITURA_PDF
+};
+function tipoDocumentoPdf(content) {
+    if (content?.formOwnerUserId)
+        return "ficha-pessoal";
+    if (content?.rpgRole === "template")
+        return "modelo-ficha";
+    if (content?.rpgRole === "module")
+        return "modulo-rpg";
+    return state.libraries.find((library) => library.id === content?.libraryId)?.kind === "other" ? "material-rpg" : "documento";
+}
+function ferramentasDoPdf(content) {
+    return FERRAMENTAS_PDF_POR_TIPO[tipoDocumentoPdf(content)];
+}
+function temFerramentaPdf(content, ferramenta) {
+    return ferramentasDoPdf(content).includes(ferramenta);
+}
 function ehFichaDeUsuario(content) {
     return Boolean(content?.formOwnerUserId) && Boolean(content?.pageTypes?.includes("pdf"));
 }
