@@ -38,6 +38,10 @@ let readerLoadingTimer = null;
 let readerNavigationId = 0;
 let pendingReaderPage = null;
 let routeLoading = false;
+let routeLoadingMensagem = "Carregando título";
+// O catálogo global só é baixado por telas que dependem dele; guias abertas em obra, leitor ou biblioteca não pagam esse custo.
+let catalogoGlobalPronto = false;
+let catalogoGlobalPedido = null;
 let globalSearchOpen = false;
 let globalSearchQuery = "";
 let globalSearchExtraContents = [];
@@ -398,8 +402,18 @@ async function applyAppRoute(route, context) {
     state.seriesReviewError = "";
     applyRouteToState(state, route);
     routeLoading = false;
+    routeLoadingMensagem = "Carregando título";
     state.loadingLibraryId = null;
     state.libraryLoadError = "";
+    if (rotaUsaCatalogoGlobal(route) && !catalogoGlobalPronto) {
+        routeLoading = true;
+        routeLoadingMensagem = "Carregando obras";
+        renderShell();
+        await garantirCatalogoGlobal();
+        if (!context.isCurrent())
+            return;
+        routeLoading = false;
+    }
     if ("libraryId" in route) {
         let content = "contentId" in route ? findContentById(route.contentId) : null;
         if (content?.libraryId !== route.libraryId)
@@ -410,11 +424,19 @@ async function applyAppRoute(route, context) {
             state.loadingLibraryId = route.libraryId;
             renderShell();
             try {
-                const payload = await api(`/api/libraries/${encodeURIComponent(route.libraryId)}/contents`);
-                if (!context.isCurrent())
-                    return;
-                state.contents = payload.contents;
-                content = "contentId" in route ? payload.contents.find((item) => item.id === route.contentId && item.libraryId === route.libraryId) ?? null : null;
+                if ("contentId" in route) {
+                    const payload = await api(`/api/libraries/${encodeURIComponent(route.libraryId)}/contents/${encodeURIComponent(route.contentId)}`);
+                    if (!context.isCurrent())
+                        return;
+                    content = payload.content;
+                    state.contents = [content];
+                }
+                else {
+                    const payload = await api(`/api/libraries/${encodeURIComponent(route.libraryId)}/contents`);
+                    if (!context.isCurrent())
+                        return;
+                    state.contents = payload.contents;
+                }
             }
             catch (error) {
                 if (!context.isCurrent())
@@ -579,7 +601,11 @@ async function boot() {
         }
         const restoredHome = restoreHomeCache();
         if (!restoredHome) {
-            renderLoadingScreen();
+            const rotaInicial = parseRoute(window.location.href);
+            if (rotaInicial.kind === "title" || rotaInicial.kind === "reader")
+                renderLoadingScreen("Carregando título");
+            else
+                renderLoadingScreen();
         }
         await loadHome();
         startSyncStatusPolling();
@@ -633,7 +659,11 @@ async function loadHome() {
         api("/api/me/reviews"),
         api("/api/users")
     ];
-    void requests[0].then(({ libraries }) => showLoadingCovers(libraries)).catch(() => {});
+    // O mosaico de capas baixa as listas das bibliotecas: só vale nas aberturas que já dependem do catálogo.
+    const rotaDaAbertura = parseRoute(window.location.href);
+    const abreSemCatalogo = rotaDaAbertura.kind === "library" || rotaDaAbertura.kind === "title" || rotaDaAbertura.kind === "reader" || (window.location.pathname === "/" && startup.libraryId);
+    if (!abreSemCatalogo)
+        void requests[0].then(({ libraries }) => showLoadingCovers(libraries)).catch(() => {});
     if (state.user?.role === "admin") {
         requests.push(api("/api/admin/users"));
         requests.push(api("/api/admin/settings"));
@@ -671,14 +701,25 @@ async function loadHome() {
     state.readingSettingsDraft = (await readingSettings).readingDefaults;
     if (pdfCopiesPayload)
         state.pdfFormCopies = pdfCopiesPayload.copies;
-    const visibleLibraries = state.libraries;
-    state.homeContents = await loadLibraryContents(getGloballyListedLibraries(visibleLibraries));
-    state.readingNowContents = await loadLibraryContents(getGloballyListedLibraries(visibleLibraries));
-    saveHomeCache();
     // Successful invitation registration has finished its dedicated auth flow.
     if (window.location.pathname.startsWith("/invite/"))
         await router.replaceRoute({ kind: "view", view: "home" }, false);
     await router.start(startup.libraryId ? { kind: "library", libraryId: startup.libraryId } : undefined);
+}
+function rotaUsaCatalogoGlobal(route) {
+    return route.kind === "view" || route.kind === "person";
+}
+function garantirCatalogoGlobal() {
+    if (catalogoGlobalPronto)
+        return Promise.resolve();
+    catalogoGlobalPedido ??= loadLibraryContents(getGloballyListedLibraries(state.libraries)).then((contents) => {
+        state.homeContents = contents;
+        state.readingNowContents = contents;
+        catalogoGlobalPronto = true;
+        catalogoGlobalPedido = null;
+        saveHomeCache();
+    });
+    return catalogoGlobalPedido;
 }
 async function loadLibraryContents(libraries) {
     const responses = await Promise.all(libraries.map((library) => api(`/api/libraries/${library.id}/contents`).catch(() => ({ contents: [] }))));
@@ -1018,7 +1059,7 @@ function renderShell() {
     releaseReaderImageWindow?.();
     releaseReaderImageWindow = null;
     if (routeLoading) {
-        renderLoadingScreen("Carregando título");
+        renderLoadingScreen(routeLoadingMensagem);
         return;
     }
     const activeLibrary = [...state.libraries, ...state.personalLibraries].find((library) => library.id === state.activeLibraryId);
@@ -6217,7 +6258,7 @@ function focusGlobalSearch() {
     });
     const extraLibraries = [...state.libraries.filter((library) => !globallyListedLibraryKinds.has(library.kind)),
         ...(state.vaultUnlocked ? state.personalLibraries : [])];
-    void loadLibraryContents(extraLibraries).then((contents) => {
+    void Promise.all([loadLibraryContents(extraLibraries), garantirCatalogoGlobal()]).then(([contents]) => {
         if (!globalSearchOpen || request !== globalSearchRequest)
             return;
         globalSearchExtraContents = contents;

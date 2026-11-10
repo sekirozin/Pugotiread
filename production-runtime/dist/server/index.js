@@ -1878,6 +1878,20 @@ async function handleApi(req, res) {
         }
         return;
     }
+    // Uma obra só: guias abertas direto no título ou no leitor não baixam a biblioteca inteira.
+    const obraDaBiblioteca = req.method === "GET" ? url.pathname.match(/^\/api\/libraries\/([^/]+)\/contents\/([^/]+)$/) : null;
+    if (obraDaBiblioteca) {
+        const contentId = decodeURIComponent(obraDaBiblioteca[2]);
+        const data = await store.read();
+        const library = getRequestLibrary(user, data.libraries, decodeURIComponent(obraDaBiblioteca[1]), req);
+        const [content] = library ? visibleContents(user, (await scanLibrary(library)).filter((item) => item.id === contentId)) : [];
+        if (!content) {
+            sendJson(res, 404, { error: "Conteúdo não encontrado." });
+            return;
+        }
+        sendJson(res, 200, { content });
+        return;
+    }
     if (url.pathname.startsWith("/api/libraries/") && url.pathname.endsWith("/contents") && req.method === "GET") {
         const libraryId = url.pathname.split("/")[3];
         const data = await store.read();
