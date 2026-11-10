@@ -5851,6 +5851,7 @@ body{background:radial-gradient(circle at 82% -10%,color-mix(in srgb,var(--pt-de
 .pdf-document-facts > span { display: inline-flex; align-items: center; gap: 6px; }
 .pdf-document-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
 .pdf-document-actions .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
+.pdf-document-actions a.button, .pdf-document-actions a.button:hover { text-decoration: none; }
 .pdf-document-reading { display: grid; gap: 10px; max-width: 480px; font-size: 13px; color: var(--muted); }
 .pdf-document-reading > div { display: flex; justify-content: space-between; gap: 12px; }
 .pdf-document-reading strong { color: var(--text); }
