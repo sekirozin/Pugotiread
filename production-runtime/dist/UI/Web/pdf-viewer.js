@@ -678,7 +678,7 @@ export async function iniciarLeitorPdf(url, paginaInicial = 1, zoomInicial = 1, 
         const pdfjs = await import(caminhoModuloPdf);
         moduloPdfAtual = pdfjs;
         pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.mjs?v=reader-epub-arrows-20260902-v12";
-        const documento = await pdfjs.getDocument({ url, rangeChunkSize: 65_536 }).promise;
+        const documento = await pdfjs.getDocument({ url, rangeChunkSize: 262_144, disableAutoFetch: true, disableStream: true }).promise;
         if (token !== tokenLeitor) {
             await documento.destroy();
             return;

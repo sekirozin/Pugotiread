@@ -169,7 +169,9 @@ export class PdfFormEditor {
                 void this.travel(event.shiftKey || event.key.toLowerCase() === 'y');
             }
         }, { capture: true, signal: this.listeners.signal });
-        void this.detect();
+        // Sem o botão, ler o formulário só custaria CPU e memória no servidor.
+        if (!this.button.hidden)
+            void this.detect();
     }
     snapshot() { return structuredClone({ values: this.values, styles: this.styles, edits: this.edits, name: this.name.value }); }
     restore(state) {

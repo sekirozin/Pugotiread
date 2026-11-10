@@ -583,6 +583,10 @@ export class Store {
         const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
         return row ? this.rowToUser(row) : null;
     }
+    usuarioPorId(userId) {
+        const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+        return row ? this.rowToUser(row) : null;
+    }
     async createUser(user) {
         this.db.prepare(`
       INSERT INTO users (id, username, displayName, email, avatarUrl, googleSub, nickname, biography, location, favoriteContentIds, canLogin, canDownload, canChangePassword, passwordChangeRequiresEmailConfirmation, lastActiveAt, role, passwordHash, allowedLibraryIds)

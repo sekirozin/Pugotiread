@@ -374,6 +374,17 @@ async function copyCharacterName(libraries, contentId) {
 function isPersonalLibrary(library) {
     return Boolean(library.isPersonal);
 }
+const blocosPdfConferidos = new Map();
+const VALIDADE_BLOCO_PDF_MS = 30_000;
+function lembrarBlocoPdfConferido(chave, caminho) {
+    const agora = Date.now();
+    if (blocosPdfConferidos.size >= 500)
+        for (const [item, valor] of blocosPdfConferidos)
+            if (valor.ate <= agora)
+                blocosPdfConferidos.delete(item);
+    if (blocosPdfConferidos.size < 1000)
+        blocosPdfConferidos.set(chave, { caminho, ate: agora + VALIDADE_BLOCO_PDF_MS });
+}
 // ---- pastas de RPG (início) ----
 // Organização de cada sistema na biblioteca de RPG (kind "other"):
 //   <Sistema>/Módulos Básicos/*.pdf            → módulo
@@ -1248,6 +1259,14 @@ async function handleApi(req, res) {
         return;
     }
     const directContent = url.pathname.match(/^\/api\/contents\/([^/]+)/);
+    // O leitor pede o PDF em muitos blocos: depois da conferência completa, os seguintes repetem só a sessão e o acesso à ficha.
+    if (directContent && req.headers.range && req.method === "GET" && url.pathname === `/api/contents/${directContent[1]}/pages/0`) {
+        const conferido = user ? blocosPdfConferidos.get(`${user.id}:${directContent[1]}`) : null;
+        if (conferido && conferido.ate > Date.now() && store.canAccessPdfContent(decodeURIComponent(directContent[1]), user)) {
+            await sendFile(req, res, conferido.caminho, "no-cache, private, must-revalidate");
+            return;
+        }
+    }
     if (directContent) {
         const id = decodeURIComponent(directContent[1]);
         const library = getRequestLibrary(user, (await store.read()).libraries, id.split(':')[0], req);
@@ -2270,6 +2289,8 @@ async function handleApi(req, res) {
                 return;
             }
         }
+        if (path.extname(pagePath).toLowerCase() === '.pdf' && !isPersonalLibrary(library))
+            lembrarBlocoPdfConferido(`${user.id}:${encodeURIComponent(pageRequest.contentId)}`, pagePath);
         await sendFile(req, res, pagePath, path.extname(pagePath).toLowerCase() === '.pdf' ? 'no-cache, private, must-revalidate' : undefined);
         return;
     }

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
+import zlib from "node:zlib";
 import { config } from "./config.js";
 const contentTypes = new Map([
     [".html", "text/html; charset=utf-8"],
@@ -28,7 +30,7 @@ const contentTypes = new Map([
 ]);
 function getStaticCacheControl(filePath, hasVersion) {
     const extension = path.extname(filePath).toLowerCase();
-    if ((extension === ".js" || extension === ".css") && hasVersion) {
+    if ((extension === ".js" || extension === ".mjs" || extension === ".css") && hasVersion) {
         return "public, max-age=31536000, immutable";
     }
     if (extension === ".html") {
@@ -86,6 +88,63 @@ export function parseSingleRange(value, size) {
         return "invalid";
     return { start, end: Math.min(requestedEnd, size - 1) };
 }
+const extensoesComprimiveis = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
+const comprimirBrotli = promisify(zlib.brotliCompress);
+const comprimirGzip = promisify(zlib.gzip);
+const LIMITE_ARQUIVO_COMPRIMIDO = 8 * 1024 * 1024;
+const LIMITE_CACHE_COMPRIMIDO = 16 * 1024 * 1024;
+const cacheComprimido = new Map();
+let bytesCacheComprimido = 0;
+async function comprimirComCache(chave, codificacao, filePath) {
+    const pronto = cacheComprimido.get(chave);
+    if (pronto) {
+        cacheComprimido.delete(chave);
+        cacheComprimido.set(chave, pronto);
+        return pronto;
+    }
+    const original = await fs.readFile(filePath);
+    const corpo = codificacao === "br"
+        ? await comprimirBrotli(original, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: original.length } })
+        : await comprimirGzip(original, { level: 6 });
+    cacheComprimido.set(chave, corpo);
+    bytesCacheComprimido += corpo.length;
+    for (const [antiga, valor] of cacheComprimido) {
+        if (bytesCacheComprimido <= LIMITE_CACHE_COMPRIMIDO || antiga === chave)
+            break;
+        cacheComprimido.delete(antiga);
+        bytesCacheComprimido -= valor.length;
+    }
+    return corpo;
+}
+/** Envia texto estático comprimido. Devolve false quando o pedido deve seguir como arquivo comum. */
+async function enviarComprimido(req, res, filePath, cacheControl) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (req.method !== "GET" || req.headers.range || !extensoesComprimiveis.has(ext))
+        return false;
+    const aceita = String(req.headers["accept-encoding"] ?? "");
+    const codificacao = /\bbr\b/.test(aceita) ? "br" : /\bgzip\b/.test(aceita) ? "gzip" : null;
+    const stat = await fs.stat(filePath);
+    if (!codificacao || !stat.isFile() || stat.size < 1024 || stat.size > LIMITE_ARQUIVO_COMPRIMIDO)
+        return false;
+    const etag = `${makeEtag(stat.size, stat.mtimeMs).slice(0, -1)}-${codificacao}"`;
+    const cabecalhos = {
+        "Content-Type": contentTypes.get(ext) ?? "application/octet-stream",
+        "Cache-Control": cacheControl,
+        "ETag": etag,
+        "Last-Modified": stat.mtime.toUTCString(),
+        "Vary": "Accept-Encoding",
+        "Content-Encoding": codificacao
+    };
+    if (isNotModified(req, etag, stat.mtimeMs)) {
+        res.writeHead(304, cabecalhos);
+        res.end();
+        return true;
+    }
+    const corpo = await comprimirComCache(`${filePath}:${etag}`, codificacao, filePath);
+    res.writeHead(200, { ...cabecalhos, "Content-Length": String(corpo.length) });
+    res.end(corpo);
+    return true;
+}
 export async function sendFile(req, res, filePath, cacheControl = getFileCacheControl(filePath)) {
     const stat = await fs.stat(filePath);
     if (!stat.isFile())
@@ -97,7 +156,8 @@ export async function sendFile(req, res, filePath, cacheControl = getFileCacheCo
         "Cache-Control": cacheControl,
         "Accept-Ranges": "bytes",
         "ETag": etag,
-        "Last-Modified": stat.mtime.toUTCString()
+        "Last-Modified": stat.mtime.toUTCString(),
+        ...(extensoesComprimiveis.has(ext) ? { "Vary": "Accept-Encoding" } : {})
     };
     if (isNotModified(req, etag, stat.mtimeMs)) {
         res.writeHead(304, commonHeaders);
@@ -200,7 +260,9 @@ export async function serveStatic(req, res) {
         return;
     }
     try {
-        await sendFile(req, res, filePath, getStaticCacheControl(filePath, url.searchParams.has("v")));
+        const controleCache = getStaticCacheControl(filePath, url.searchParams.has("v"));
+        if (!(await enviarComprimido(req, res, filePath, controleCache)))
+            await sendFile(req, res, filePath, controleCache);
     }
     catch {
         if (path.extname(requestedPath)) {

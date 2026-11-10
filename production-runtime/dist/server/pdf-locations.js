@@ -22,8 +22,10 @@ export async function reconcilePdfLocation(library, contentId) {
     if (!key)
         return contentId;
     // Track ordinary PDFs too: bookmarks must survive moving a book into a system folder.
-    if (store.pdfLocation(contentId)) {
-        store.rememberPdfLocation(contentId, key);
+    const conhecida = store.pdfLocation(contentId);
+    if (conhecida) {
+        if (conhecida.fileKey !== key)
+            store.rememberPdfLocation(contentId, key);
         return contentId;
     }
     const old = store.pdfLocationsByFileKey(key).find(item => item.contentId.startsWith(library.id + ':'));

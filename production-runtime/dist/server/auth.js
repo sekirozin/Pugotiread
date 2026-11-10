@@ -263,8 +263,7 @@ export async function getCurrentUser(req, res) {
         if (res && !res.headersSent) clearSessionCookie(res);
         return null;
     }
-    const data = await store.read();
-    const found = data.users.find((user) => user.id === userId) ?? null;
+    const found = store.usuarioPorId(userId);
     if (!found) {
         return syncPugotilabSession(req, res);
     }
