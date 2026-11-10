@@ -3818,7 +3818,7 @@ function renderSeriesView(content, activeLibrary) {
                       ${renderPersonalRatingDisplay(personalRating)}
                     </div>
                   </div>`
-        : `<div class="series-rating-sources"><div class="series-rating-source"><span class="series-rating-label">Nota da fonte</span>${renderSeriesRatingDisplay(content.rating)}</div><div class="series-rating-source"><span class="series-rating-label">Minha avaliação</span><span class="series-personal-rating-group">${renderPersonalRatingDisplay(personalRating)}<small class="series-stat-note">${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</small></span></div></div>`}
+        : `<div class="series-rating-sources"><div class="series-rating-source"><span class="series-rating-label">Nota da fonte</span>${renderSeriesRatingDisplay(content.rating)}</div><div class="series-rating-source"><span class="series-rating-label">Minha avaliação</span><span class="series-personal-rating-group">${renderPersonalRatingDisplay(personalRating)}<button class="series-stat-note series-reviews-link" data-series-tab="reviews" type="button">${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</button></span></div></div>`}
             </div>
             <div class="series-stat-card">
               <span class="series-stat-icon">${renderIcon("release")}</span>

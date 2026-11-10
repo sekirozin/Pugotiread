@@ -6552,3 +6552,9 @@ body {
 .review-estrelas-opcoes:has(label:hover) .review-estrela-par:has(~ .review-estrela-par label:hover) .preenchimento { visibility: visible; clip-path: none; }
 .review-estrelas-opcoes:has(label:hover) .review-estrela-par:has(label.esquerda:hover) .preenchimento { visibility: visible; clip-path: inset(0 50% 0 0); }
 .review-estrela-par:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+/* Contador de reviews centralizado com as estrelas; o clique ativa a aba Reviews (09/11/2026). */
+.series-personal-rating-group { align-items: center; }
+.series-personal-rating-group .personal-rating-display { align-items: center; }
+.series-reviews-link { padding: 0; border: 0; background: none; font: inherit; line-height: 1; cursor: pointer; }
+.series-reviews-link:hover { text-decoration: underline; }
