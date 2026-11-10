@@ -6525,20 +6525,30 @@ body {
 [data-theme="light"] .topbar { background: color-mix(in srgb,var(--pt-painel,rgb(255,250,243)) 92%,transparent); }
 [data-theme="light"] .sidebar { background: color-mix(in srgb,var(--pt-painel,rgb(255,250,243)) 92%,transparent); }
 
-/* Reviews em estrelas de 1 a 5 (09/11/2026). */
+/* Reviews em estrelas de 1 a 5, de meia em meia (09/11/2026). */
 .review-estrelas { display: inline-flex; gap: 2px; }
 .review-estrela { display: block; width: 18px; height: 18px; color: var(--muted); }
-.review-estrela.cheia { color: #f2b705; fill: currentColor; }
+.review-estrela .preenchimento { visibility: hidden; color: #f2b705; fill: currentColor; stroke: currentColor; }
+.review-estrela.cheia .preenchimento,
+.review-estrela.meia .preenchimento { visibility: visible; }
+.review-estrela.meia .preenchimento { clip-path: inset(0 50% 0 0); }
 .profile-review-header span.review-estrelas { padding: 0; background: none; }
 .review-estrelas-campo { min-width: 0; margin: 0; padding: 0; border: 0; }
 .review-estrelas-campo legend { margin-bottom: 6px; padding: 0; }
 .review-estrelas-opcoes { display: inline-flex; gap: 2px; }
-.review-estrelas-opcoes label { position: relative; display: block; padding: 3px; border-radius: 6px; cursor: pointer; }
-.review-estrelas-opcoes input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.review-estrelas-opcoes .review-estrela { width: 30px; height: 30px; }
-.review-estrelas-opcoes label:has(input:checked) .review-estrela,
-.review-estrelas-opcoes label:has(~ label input:checked) .review-estrela { color: #f2b705; fill: currentColor; }
-.review-estrelas-opcoes:has(label:hover) label .review-estrela { color: var(--muted); fill: none; }
-.review-estrelas-opcoes:has(label:hover) label:hover .review-estrela,
-.review-estrelas-opcoes:has(label:hover) label:has(~ label:hover) .review-estrela { color: #f2b705; fill: currentColor; }
-.review-estrelas-opcoes label:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }
+.review-estrela-par { position: relative; display: block; width: 44px; height: 44px; padding: 2px; border-radius: 6px; }
+.review-estrela-par .review-estrela { width: 40px; height: 40px; }
+.review-estrela-par label { position: absolute; top: 0; bottom: 0; width: 50%; cursor: pointer; }
+.review-estrela-par label.esquerda { left: 0; }
+.review-estrela-par label.direita { right: 0; }
+.review-estrela-par label.inteira { width: 100%; }
+.review-estrela-par input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.review-estrela-par:has(label.direita input:checked) .preenchimento,
+.review-estrela-par:has(~ .review-estrela-par input:checked) .preenchimento,
+.review-estrela-par:has(label.esquerda input:checked) .preenchimento { visibility: visible; }
+.review-estrela-par:has(label.esquerda input:checked) .preenchimento { clip-path: inset(0 50% 0 0); }
+.review-estrelas-opcoes:has(label:hover) .preenchimento { visibility: hidden; clip-path: none; }
+.review-estrelas-opcoes:has(label:hover) .review-estrela-par:has(label.direita:hover) .preenchimento,
+.review-estrelas-opcoes:has(label:hover) .review-estrela-par:has(~ .review-estrela-par label:hover) .preenchimento { visibility: visible; clip-path: none; }
+.review-estrelas-opcoes:has(label:hover) .review-estrela-par:has(label.esquerda:hover) .preenchimento { visibility: visible; clip-path: inset(0 50% 0 0); }
+.review-estrela-par:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }

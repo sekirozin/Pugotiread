@@ -3927,22 +3927,30 @@ function renderPersonalRatingDisplay(rating) {
     const conteudo = typeof rating === "number" && Number.isFinite(rating) ? renderEstrelasReview(rating) : "<strong>N/A</strong>";
     return `<span class="personal-rating-display">${conteudo}</span>`;
 }
-// Estrela do Tabler Icons, contornada ou preenchida pela classe "cheia".
-function renderEstrelaTabler(cheia = false) {
-    return `<svg class="review-estrela${cheia ? " cheia" : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873z"/></svg>`;
+// Estrela do Tabler Icons em duas camadas: o contorno e o preenchimento, inteiro ("cheia") ou só na metade esquerda ("meia").
+function renderEstrelaTabler(estado = "") {
+    const estrela = "M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873z";
+    return `<svg class="review-estrela${estado ? ` ${estado}` : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${estrela}"/><path class="preenchimento" d="${estrela}"/></svg>`;
 }
 function notaEmEstrelas(nota) {
-    return Math.min(5, Math.max(0, Math.round(Number(nota) || 0)));
+    return Math.min(5, Math.max(0, Math.round((Number(nota) || 0) * 2) / 2));
+}
+function formatarNotaEstrelas(nota) {
+    return String(nota).replace(".", ",");
 }
 function renderEstrelasReview(nota) {
     const estrelas = notaEmEstrelas(nota);
-    return `<span class="review-estrelas" role="img" aria-label="${estrelas} de 5 estrelas">${[1, 2, 3, 4, 5].map((posicao) => renderEstrelaTabler(posicao <= estrelas)).join("")}</span>`;
+    const icones = [1, 2, 3, 4, 5].map((posicao) => renderEstrelaTabler(estrelas >= posicao ? "cheia" : estrelas >= posicao - 0.5 ? "meia" : ""));
+    return `<span class="review-estrelas" role="img" aria-label="${formatarNotaEstrelas(estrelas)} de 5 estrelas">${icones.join("")}</span>`;
 }
 function renderCampoEstrelasReview(notaAtual) {
     const estrelas = notaEmEstrelas(notaAtual);
+    const opcao = (valor, lado) => `<label class="${lado}" title="${formatarNotaEstrelas(valor)} de 5"><input type="radio" name="rating" value="${valor}" aria-label="${formatarNotaEstrelas(valor)} de 5 estrelas" required${valor === estrelas ? " checked" : ""} /></label>`;
+    // A nota mínima é 1, então a primeira estrela não tem metade.
+    const pares = [1, 2, 3, 4, 5].map((posicao) => `<span class="review-estrela-par">${renderEstrelaTabler()}${posicao > 1 ? opcao(posicao - 0.5, "esquerda") : ""}${opcao(posicao, posicao > 1 ? "direita" : "direita inteira")}</span>`);
     return `<fieldset class="review-estrelas-campo">
             <legend>Nota</legend>
-            <div class="review-estrelas-opcoes">${[1, 2, 3, 4, 5].map((posicao) => `<label title="${posicao} de 5"><input type="radio" name="rating" value="${posicao}" aria-label="${posicao} de 5 estrelas" required${posicao === estrelas ? " checked" : ""} />${renderEstrelaTabler()}</label>`).join("")}</div>
+            <div class="review-estrelas-opcoes">${pares.join("")}</div>
           </fieldset>`;
 }
 function renderSeriesTabButton(tab, label, count) {
@@ -6234,7 +6242,7 @@ function bindShellEvents(root = document) {
             const formData = new FormData(form);
             const rating = Number(formData.get("rating"));
             const comment = String(formData.get("comment") ?? "").trim();
-            if (!Number.isInteger(rating) || rating < 1 || rating > 5 || !comment) {
+            if (!Number.isInteger(rating * 2) || rating < 1 || rating > 5 || !comment) {
                 state.seriesReviewError = "Escolha de 1 a 5 estrelas e escreva um comentário.";
                 renderShell();
                 return;
