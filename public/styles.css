@@ -6512,7 +6512,7 @@ body {
 .reader-character-photo.is-compact { top: auto; bottom: 16px; width: 76px; padding: 6px; cursor: zoom-in; }
 .reader-character-photo.is-compact:not(.is-expanded) :is(.reader-character-photo-label, .reader-character-photo-actions, .reader-character-photo-empty span, .reader-character-photo-add) { display: none; }
 .reader-character-photo.is-compact:not(.is-expanded) .reader-character-photo-image { max-height: 100px; object-fit: cover; aspect-ratio: 3 / 4; }
-.reader-character-photo.is-compact.is-expanded { width: min(320px, calc(100vw - 32px)); cursor: zoom-out; }
+.reader-character-photo.is-compact.is-expanded { width: min(290px, calc(100vw - 32px)); cursor: zoom-out; }
 
 /* Minhas Reviews (04/11/2026): o perfil fica no Pugoti Profile; aqui só as reviews. */
 .reviews-page .series-section-heading h1 { margin: 0; font-size: 1.4rem; }
@@ -6558,3 +6558,12 @@ body {
 .series-personal-rating-group .personal-rating-display { align-items: center; }
 .series-reviews-link { padding: 0; border: 0; background: none; font: inherit; line-height: 1; cursor: pointer; }
 .series-reviews-link:hover { text-decoration: underline; }
+
+/* Ficha sem foto: painel compacto, para não cobrir a leitura (09/11/2026). */
+.reader-character-photo.is-empty:not(.is-compact),
+.reader-character-photo.is-empty.is-compact.is-expanded { width: 180px; }
+.reader-character-photo.is-empty .reader-character-photo-label { font-size: 11px; }
+.reader-character-photo.is-empty .reader-character-photo-empty { aspect-ratio: auto; grid-auto-flow: column; grid-template-columns: auto 1fr; align-items: center; justify-content: stretch; justify-items: start; gap: 8px; padding: 0; border: 0; }
+.reader-character-photo.is-empty .reader-character-photo-empty span { display: none; }
+.reader-character-photo.is-empty .reader-character-photo-empty .reader-pdf-toolbar-icon { width: 20px; height: 20px; }
+.reader-character-photo.is-empty .reader-character-photo-add { padding: 6px 10px; font-size: 12px; }

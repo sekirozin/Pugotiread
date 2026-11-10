@@ -8421,7 +8421,7 @@ function ajustarPainelFotoPersonagem() {
         paginaObservadaFoto = pagina;
     }
     const livre = pagina ? pagina.getBoundingClientRect().left : 0;
-    const largura = Math.min(340, Math.floor(livre - 40));
+    const largura = Math.min(290, Math.floor(livre - 40));
     const compacto = largura < 160;
     painel.classList.toggle("is-compact", compacto);
     if (!compacto) {
